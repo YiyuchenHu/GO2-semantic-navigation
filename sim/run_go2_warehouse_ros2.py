@@ -1014,11 +1014,43 @@ def main():
     # external ros2 CLI gets a chance to bind, and is cheap (~6 physics
     # frames at 60 Hz = 0.1 s wall time).
     _PRIME_FRAMES = 12
-    print(f"[run_ros2] Priming {_PRIME_FRAMES} physics frames before main loop...")
-    for _ in range(_PRIME_FRAMES):
-        world.step(render=True)
+    # Priming runs WITHOUT rendering (render=False) on purpose. The
+    # very first `step(render=True)` call on a cold RTX 5090 (sm_120)
+    # shader cache is observed to take 5-15 minutes — Vulkan + Newton
+    # physics + Ouster OS1 raytracing pipelines all compile from
+    # scratch. Doing 12 such full-render priming steps would multiply
+    # that cost. Instead, prime physics-only here (so IMU / odom /
+    # articulation tensor view all settle), then hand off to the main
+    # loop which does its own render=True step. The first main-loop
+    # step still pays the shader-compile cost ONCE; every subsequent
+    # main-loop step uses the warm cache and runs at ~30 Hz.
+    print(f"[run_ros2] Priming {_PRIME_FRAMES} physics frames "
+          f"(render=False to dodge the cold-cache shader compile; "
+          f"the first main-loop frame will pay that cost ONCE) ...")
+    sys.stdout.flush()
+    _prime_t0 = time.time()
+    for _i in range(_PRIME_FRAMES):
+        _frame_t0 = time.time()
+        world.step(render=False)
+        _frame_dt = time.time() - _frame_t0
+        print(f"[run_ros2]   prime frame {_i + 1}/{_PRIME_FRAMES} "
+              f"({_frame_dt*1000:.0f} ms, render=False)")
+        sys.stdout.flush()
+    print(f"[run_ros2] Priming complete in {time.time() - _prime_t0:.1f}s.")
+    sys.stdout.flush()
+    print("[run_ros2] First main-loop step will compile RTX/Vulkan/Warp "
+          "shaders — expect 1-5 min of silence on first run, then "
+          "the heartbeat below. Cache is on disk; subsequent runs are "
+          "much faster.")
+    sys.stdout.flush()
 
-    print("[run_ros2] Ready. Publishing ROS 2 topics. Ctrl-C to stop.")
+    print("=" * 70)
+    print("[run_ros2] READY. Publishing ROS 2 topics. Ctrl-C to stop.")
+    print("[run_ros2] Verify from another shell:")
+    print("[run_ros2]   source /opt/ros/jazzy/setup.bash && \\")
+    print("[run_ros2]     ros2 topic hz /camera/color/image_raw")
+    print("=" * 70)
+    sys.stdout.flush()
     last_print = time.time()
     while simulation_app.is_running():
         world.step(render=True)
@@ -1027,6 +1059,7 @@ def main():
         if time.time() - last_print > 5.0:
             last_print = time.time()
             print(f"[run_ros2] alive  sim_time={world.current_time:.2f}s")
+            sys.stdout.flush()
 
     simulation_app.close()
 

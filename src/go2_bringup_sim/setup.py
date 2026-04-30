@@ -19,6 +19,8 @@ setup(
             "launch/mapping.launch.py",
             "launch/nav2.launch.py",
             "launch/yoloe.launch.py",
+            "launch/day6.launch.py",
+            "launch/day7.launch.py",
         ]),
         (f"share/{package_name}/config", ["config/sim_interface_contract.yaml"]),
         (f"share/{package_name}/config/slam", [

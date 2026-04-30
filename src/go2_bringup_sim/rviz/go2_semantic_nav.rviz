@@ -284,6 +284,80 @@ Visualization Manager:
       Normalize Range: true
       Queue Size: 2
 
+    # ---- Day 6: semantic memory markers ------------------------------------
+    # /semantic_map/markers is a MarkerArray published by
+    # semantic_memory_aggregator_node. Each persistent SemanticEntity
+    # contributes:
+    #   * one CYLINDER (axis=Z, height 0.4 m, radius 0.15 m, colour
+    #     hashed from the class string, alpha=confidence)
+    #   * one TEXT_VIEW_FACING above it ("<class> <conf:.2f> (n=<obs>)")
+    # The first marker every tick is a DELETEALL so dropped entities
+    # disappear cleanly.
+    #
+    # Day 7+ target selection adds /semantic_map/selected_marker on
+    # top of this; for Day 6 acceptance the cylinder + label combo
+    # is enough.
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Semantic memory (Day 6)
+      Enabled: true
+      Topic:
+        Value: /semantic_map/markers
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Namespaces: {}
+
+    # ---- Day 7: target navigation goal pose --------------------------------
+    # /semantic_goal/goal_pose is the single PoseStamped that the
+    # approach_goal_planner just sent via NavigateToPose. It mirrors the
+    # action goal so RViz shows "where the Go2 will stop" without
+    # subscribing to the action server. Yellow arrow lying flat on the
+    # ground (z=0); arrow shaft length encodes desired heading at the
+    # goal — usually pointing back at the target object.
+    - Class: rviz_default_plugins/Pose
+      Name: Approach goal (Day 7)
+      Enabled: true
+      Topic:
+        Value: /semantic_goal/goal_pose
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Color: 255; 200; 0
+      Alpha: 1
+      Shaft Length: 0.5
+      Shaft Radius: 0.05
+      Head Length: 0.2
+      Head Radius: 0.1
+      Shape: Arrow
+
+    # ---- Day 7: ring-sample candidates -------------------------------------
+    # /semantic_goal/goal_candidates is a MarkerArray rendered every
+    # replan tick:
+    #   * yellow sphere   = target centre (Day 6 entity)
+    #   * green cylinder  = ring-sample pose that PASSED the costmap
+    #                       gate (cost <= cost_threshold). Visible
+    #                       greens with no goal arrow means the
+    #                       planner picked one of them — usually the
+    #                       closest-to-base_link with best heading
+    #                       alignment.
+    #   * red cylinder    = ring-sample pose REJECTED by the costmap
+    #                       (lethal cell, inflation halo, unknown,
+    #                       or off-map).
+    # If you see all-red rings, lower cost_threshold or shrink
+    # approach_distance_default.
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Approach candidates (Day 7)
+      Enabled: true
+      Topic:
+        Value: /semantic_goal/goal_candidates
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Namespaces: {}
+
     # ---- Day 5: YOLOE detection overlay ------------------------------------
     # /detections/image is the input RGB frame with green bboxes,
     # class-name + score labels, and (on -seg weights) a translucent

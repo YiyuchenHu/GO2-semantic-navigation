@@ -77,4 +77,49 @@ fi
 
 echo "[run_warehouse_ros2] ISAAC_SIM_ROOT=${ISAAC_SIM_ROOT}" >&2
 echo "[run_warehouse_ros2] Args: ${_extra_args[*]} $*" >&2
-exec "${ISAAC_SIM_ROOT}/python.sh" sim/run_go2_warehouse_ros2.py "${_extra_args[@]}" "$@"
+
+# We deliberately DO NOT `exec` here. Running Kit as a backgrounded child plus
+# a SIGINT/SIGTERM trap lets us escalate to SIGKILL when Kit's startup
+# deadlocks in fabric / USD / PhysX init — that's the window where the Kit-
+# side Python signal handler is NOT yet armed and a plain Ctrl+C gets
+# silently swallowed (you see ^C^C in the terminal but the prompt never
+# comes back). With the trap below, Ctrl+C here is guaranteed to return
+# the shell within ~10 s no matter what state Kit was in.
+"${ISAAC_SIM_ROOT}/python.sh" sim/run_go2_warehouse_ros2.py "${_extra_args[@]}" "$@" &
+_GO2_SIM_PID=$!
+echo "[run_warehouse_ros2] Isaac Sim pid=${_GO2_SIM_PID} (Ctrl+C here to shut down)" >&2
+
+_go2_cleanup() {
+	# Block re-entry if the user hammers Ctrl+C while we're already cleaning up.
+	trap '' INT TERM HUP
+	if kill -0 "${_GO2_SIM_PID}" 2>/dev/null; then
+		echo >&2
+		echo "[run_warehouse_ros2] caught signal — SIGTERM Isaac Sim (pid ${_GO2_SIM_PID}), waiting up to 10 s for clean shutdown..." >&2
+		kill -TERM "${_GO2_SIM_PID}" 2>/dev/null || true
+		# Kit needs time to flush USD / PhysX / Fabric state. Poll up to 10 s.
+		for _i in $(seq 1 10); do
+			kill -0 "${_GO2_SIM_PID}" 2>/dev/null || break
+			sleep 1
+		done
+		if kill -0 "${_GO2_SIM_PID}" 2>/dev/null; then
+			echo "[run_warehouse_ros2] still alive after 10 s — escalating to SIGKILL" >&2
+			kill -KILL "${_GO2_SIM_PID}" 2>/dev/null || true
+		fi
+	fi
+}
+trap _go2_cleanup INT TERM HUP
+
+# `wait` returns 128+signo when interrupted by a trapped signal; with `set -e`
+# bash would exit immediately and skip our cleanup-driven shutdown bookkeeping.
+# Disable -e just for this call.
+set +e
+wait "${_GO2_SIM_PID}"
+_GO2_EXIT=$?
+set -e
+
+# If the signal arrived after wait() returned but Kit somehow lingered
+# (uncommon, but possible if the child re-forks), give cleanup another shot.
+if kill -0 "${_GO2_SIM_PID}" 2>/dev/null; then
+	_go2_cleanup
+fi
+exit "${_GO2_EXIT}"
