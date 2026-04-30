@@ -295,30 +295,42 @@ cylinder and the "Approach candidates (Day 7)" red ring sit far
 away, on or beyond the wall. Both are in the `odom` frame; the
 visual offset *is* the bug — the entity's pose data is wrong.
 
-**Suspected root causes** (none confirmed yet — diagnose next
-session):
+**Suspected root causes** (one likely confirmed):
 
-1. **Mask-median depth bias**: `depth_projector_node` takes the
-   median depth value over the YOLOE mask region. If the mask
-   slightly bleeds into far-wall or ceiling pixels at its edges,
-   the median jumps from ~5 m to ~10 m, and the projected 3D
-   point lands behind the wall. Likely fix: tighten mask via
-   morphological erosion before median, or use the bbox-centre
-   pixel only (more sensitive to mis-centred masks but immune
-   to edge bleed).
-2. **Optical frame TF inversion**: the static TF
-   `base_link → camera_color_optical_frame` is published by
-   `chair_perception.launch.py`'s `static_transform_publisher`
-   with the standard ROS optical-frame convention (z forward,
-   x right, y down). If Isaac Sim's camera prim doesn't actually
-   match this convention, depth values that should be along
-   `+camera_z` end up rotated.
+1. **camera optical-frame TF is rotated wrong**. Strongest evidence
+   so far: with base_link at odom (0.023, 0, 0.131), yaw = -10.69°,
+   and the sim table actually positioned in front of the robot
+   (~5-6 m forward in `+x_baselink`), the math says the table
+   should land at odom ~(5.9, -1.1, 0.6). Instead `depth_projector`
+   reports it at odom (-1.89, -9.18, 0.89) — same magnitude
+   distance but rotated almost 90° clockwise. Mask-edge depth
+   noise can't produce a 90° angular error; only a wrong rotation
+   transform can. The candidate is the static TF in
+   `chair_perception.launch.py`:
+   ```
+   static_transform_publisher --x 0.30 --y 0.00 --z 0.12 \
+       --qx 0.5 --qy -0.5 --qz 0.5 --qw -0.5 \
+       --frame-id base_link --child-frame-id camera_link
+   ```
+   The `--qw -0.5` (negative) puts the quaternion in the opposite
+   hemisphere from the standard "REP-103 optical convention"
+   value. ROS canonicalises quaternions to the `qw >= 0`
+   hemisphere internally, but mixing both forms in a TF chain
+   has been known to flip rotation sign on at least one
+   intermediate frame, producing exactly this kind of
+   90°-cardinal-axis error. **Likely fix**: replace with
+   `--qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5` and re-launch.
+2. **Mask-median depth bias** (less likely given the angular
+   nature of the error): `depth_projector_node` takes the
+   median depth over the YOLOE mask region. If the mask
+   bleeds onto far walls / ceiling, median jumps and projection
+   lands behind the wall. Easy to test by switching to bbox-
+   centre depth instead of mask-median.
 3. **Depth unit mismatch**: sim publishes
    `/camera/depth/image_rect_raw` as 32FC1 in metres
    (per Day-1 contract). If `depth_projector` accidentally
-   treats it as 16UC1 mm, distances scale by 1000×, but here
-   the bias is ~2× not 1000×, so this is unlikely the root
-   cause.
+   treats it as 16UC1 mm, distances scale by 1000×; here
+   the magnitude bias is ~1.7× not 1000×, so this isn't it.
 
 **Diagnostic recipe**:
 
