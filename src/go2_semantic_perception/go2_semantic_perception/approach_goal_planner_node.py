@@ -342,31 +342,27 @@ class ApproachGoalPlannerNode(Node):
             return
         rx, ry, ryaw = robot
 
-        # -- Throttle: skip if same target & target hasn't moved much.
         target_xy = (
             float(sel.target_pose_map.position.x),
             float(sel.target_pose_map.position.y),
         )
-        if (
-            self._last_sent_entity_id == sel.entity_id
-            and self._last_sent_target_xy is not None
-            and self._dist(self._last_sent_target_xy, target_xy)
-                < self._replan_dist_m
-        ):
-            # Republish current goal pose for RViz freshness, but
-            # don't re-send the action — Nav2 is still working on
-            # the previous goal.
-            self._tick_log()
-            return
 
         # -- Generate ring of candidates + filter by costmap.
+        # ALWAYS run sampling + costmap filtering + marker publishing
+        # every tick (even when we're throttling the action send).
+        # That way `/semantic_goal/goal_candidates` and `/goal_pose`
+        # never go silent — RViz keeps animating, `ros2 topic echo`
+        # always sees fresh data, and the operator can see in real
+        # time when a previously-rejected ring direction opens up
+        # (e.g. costmap inflation just got re-published, or target
+        # drifted enough to expose new clear cells). The throttle
+        # below only short-circuits the *action send*, never the
+        # diagnostic publishing.
         approach_d = self._approach.get(
             sel.class_label.lower(), self._approach_default
         )
         candidates = self._sample_ring(target_xy, approach_d)
         scored, rejected = self._filter_by_costmap(candidates)
-        # Publish all candidates as markers (green=ok, red=rejected)
-        # so the operator can eyeball *why* a target failed.
         self._publish_candidates(target_xy, scored, rejected)
 
         if not scored:
@@ -381,12 +377,52 @@ class ApproachGoalPlannerNode(Node):
             self._tick_log()
             return
 
-        # -- Score each viable candidate. Pick the best.
+        # -- Pick best candidate every tick (pose is republished on
+        # /semantic_goal/goal_pose for RViz freshness).
         best = self._pick_best(scored, target_xy, rx, ry, ryaw)
+
+        # -- Throttle: only re-send the NavigateToPose action if the
+        # target has moved more than `replan_distance_m` since the
+        # last send, OR the target identity has changed entirely.
+        # The goal_pose marker is republished by `_send_goal()` on
+        # every actual send; for throttled ticks we still republish
+        # `best` directly so RViz `/semantic_goal/goal_pose` stays
+        # fresh.
+        if (
+            self._last_sent_entity_id == sel.entity_id
+            and self._last_sent_target_xy is not None
+            and self._dist(self._last_sent_target_xy, target_xy)
+                < self._replan_dist_m
+        ):
+            self._republish_goal_pose(best)
+            self._tick_log()
+            return
+
+        # New target / target moved enough → send a fresh goal.
         self._send_goal(best, sel)
         self._last_sent_entity_id = sel.entity_id
         self._last_sent_target_xy = target_xy
         self._tick_log()
+
+    def _republish_goal_pose(
+        self, pose_xy_yaw: Tuple[float, float, float]
+    ) -> None:
+        """Publish best candidate as PoseStamped without sending action.
+
+        Used during throttled ticks (target hasn't moved enough to
+        warrant a re-send to Nav2) so /semantic_goal/goal_pose stays
+        warm. Mirrors the publish in `_send_goal()` minus the action
+        client call.
+        """
+        sx, sy, yaw = pose_xy_yaw
+        ps = PoseStamped()
+        ps.header.stamp = self.get_clock().now().to_msg()
+        ps.header.frame_id = self._global_frame
+        ps.pose.position.x = float(sx)
+        ps.pose.position.y = float(sy)
+        ps.pose.position.z = 0.0
+        ps.pose.orientation = _yaw_to_quat(yaw)
+        self._goal_pub.publish(ps)
 
     # ------------------------------------------------------------------
     # Sampling / filtering / scoring

@@ -125,11 +125,41 @@ def generate_launch_description() -> LaunchDescription:
 
     # REP-103 optical frame quaternion (parent = REP-103 body, child =
     # optical): rotates body's (X forward, Y left, Z up) basis into
-    # optical's (X right, Y down, Z forward) basis. The quaternion is
-    # the well-known (qx, qy, qz, qw) = (0.5, -0.5, 0.5, 0.5).
-    # We anchor the optical frames directly to base_link (rather than
-    # camera_link) because camera_link in this codebase is the
-    # USD/OpenGL convention, so chaining optical under it would
+    # optical's (X right, Y down, Z forward) basis.
+    #
+    # The static_transform_publisher quaternion encodes "child axes
+    # expressed in parent frame", i.e. rotation matrix R such that
+    # `p_parent = R @ p_child`. With body = base_link and child =
+    # optical:
+    #
+    #   optical +X (right)   == base_link -Y == ( 0, -1,  0)
+    #   optical +Y (down)    == base_link -Z == ( 0,  0, -1)
+    #   optical +Z (forward) == base_link +X == ( 1,  0,  0)
+    #
+    # so R = [[ 0,  0,  1],
+    #         [-1,  0,  0],
+    #         [ 0, -1,  0]]
+    #
+    # which converts (via the trace==0 branch with R[0][0] picked as
+    # the largest diagonal) to the unit quaternion
+    #
+    #   (qx, qy, qz, qw) = (0.5, -0.5, 0.5, -0.5)
+    #
+    # WARNING: a previous version of this file shipped qw=+0.5
+    # (instead of -0.5), which is a subtly different rotation: it
+    # makes optical +Z point along base_link -Y (the robot's LEFT
+    # side) instead of +X (forward). depth_projector_node used
+    # those static TFs to convert pixel-space (mask median) depth
+    # into odom-frame 3D points, and as a result every projected
+    # entity ended up ~90° off true direction — e.g. the warehouse
+    # table at (~0, 0) world-frame appeared at odom (-1.89, -9.18)
+    # instead of (~5.9, -1.1). See docs/known_issues.md #8 for the
+    # full debugging trail.
+    #
+    # We anchor the optical frames directly to base_link (rather
+    # than chaining off camera_link) because camera_link in this
+    # codebase uses the USD/OpenGL convention (X right, Y up,
+    # Z back). Chaining REP-103 optical underneath it would
     # double-rotate. The translation matches the USD camera prim's
     # (0.30, 0.00, 0.12) offset in base_link.
     _OPTICAL_FRAME_ARGS = [
@@ -139,7 +169,7 @@ def generate_launch_description() -> LaunchDescription:
         "--qx", "0.5",
         "--qy", "-0.5",
         "--qz", "0.5",
-        "--qw", "0.5",
+        "--qw", "-0.5",   # was "0.5"; see comment above
         "--frame-id", "base_link",
     ]
     camera_color_optical_tf = Node(
