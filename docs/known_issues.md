@@ -186,3 +186,82 @@ legacy launches get pruned.
 but is not in any active launch. `/cmd_vel` flows directly from
 Nav2's `collision_monitor` into the sim's `SubTwist` node. For real-
 robot deployment a safety supervisor MUST be inserted in this path.
+
+---
+
+## 7. ⚠️ Isaac Sim 5.1 cold shader compile on RTX 5090 (sm_120) is brutal
+
+**Status**: workaround in place, not a bug per se but biggest
+operational footgun in Day 6/7 sessions.
+
+**Symptoms**: first ever launch of `run_warehouse_ros2.sh` (or first
+launch after the shader cache is wiped) sits silently at
+`Priming 12 physics frames before main loop ...` for 5–25 minutes,
+then either:
+* (lucky) emits `[run_ros2] alive sim_time=...` and runs at full speed
+  forever, OR
+* (unlucky) is SIGKILL'd by mutter's stuck-window watchdog (when
+  GUI mode) OR deadlocks indefinitely with GPU util ~3 % (when
+  headless), OR
+* (very unlucky) crashes Hydra RTX with no stack trace and no
+  minidump from the embedded Breakpad reporter.
+
+**Root cause**: NVIDIA driver 580.126.09 on RTX 5090 (sm_120) is
+brand-new silicon. Every Vulkan / RTX raytracing pipeline that Kit
+boots needs a fresh shader compile, and the compile pass for
+**multiple render products at once** (RGB camera + depth camera +
+RTX LiDAR's Ouster OS1) appears to deadlock in the driver under
+specific orderings. Kit's logger stops draining (spdlog blocks on
+GPU wait), so the operator sees nothing and assumes a hang.
+
+**Workarounds in place**:
+
+1. `sim/run_go2_warehouse_ros2.py` primes physics with
+   `world.step(render=False)` (12 frames in <1 s). The first
+   `render=True` only happens once we've entered the main loop,
+   minimising the period the shader compile blocks the spdlog
+   sink. Per-frame heartbeat + a banner make compile vs. deadlock
+   distinguishable.
+2. **Always run headless first** (`bash scripts/run_warehouse_ros2.sh
+   --headless`). The mutter ping watchdog only kills GUI processes;
+   a headless Kit will compile uninterrupted (just slowly).
+3. Once the cache is built, **back it up immediately**:
+   ```
+   cp -a ~/isaacsim_5.1_backup/kit/cache/Kit ~/isaacsim_5.1_backup/kit/cache/Kit.warm
+   cp -a ~/.nv/ComputeCache                  ~/.nv/ComputeCache.warm
+   ```
+   Future cold-boot pain is now reversible — just restore from the
+   `.warm` copies before launching.
+4. **NEVER run `rm -rf` on `~/isaacsim_5.1_backup/kit/cache/Kit` or
+   `~/.nv/ComputeCache`**. The previous "clear-corrupt-cache"
+   instinct cost 25 minutes of cold compile in this session.
+5. If the sim deadlocks repeatedly, **reboot the system**, not just
+   `kill -9`. SIGKILL leaks GPU memory pool / CUDA context / Vulkan
+   device queues in the driver, and only a kernel module reload
+   (or `nvidia-smi --gpu-reset` with all GPU processes stopped)
+   recovers them.
+6. For early bring-up, **`--no-lidar --rgb-resolution 640x480
+   --depth-resolution 320x240`** drops the cold-compile footprint
+   to one or two RT pipelines, which seems to dodge the deadlock
+   reliably. Re-add LiDAR once cache is warm.
+
+**Long-term fix**: NVIDIA driver 5xx → 580 series is supposed to land
+sm_120 stability fixes on a Q3 2026 timeline; until then the
+operational rules above are the project's working answer. Running
+**Isaac Sim 4.5 instead of 5.1** would also work (the Hydra RTX
+deadlock is 5.1-only) but reverts other Day-1 setup work.
+
+**Diagnostic commands** for future incidents:
+
+```
+# Sim alive but no output? Watch the cache grow vs. CPU time grow:
+watch -n 5 'ps -p <pid> -o pid,pcpu,etime,cputime; \
+            du -sh ~/isaacsim_5.1_backup/kit/cache/Kit ~/.nv/ComputeCache'
+
+# Cache size growing OR cputime growing  → still compiling, wait
+# Cache size frozen 60s+ AND cputime frozen → real deadlock, kill + reboot
+
+# Confirm GPU isn't OOM / hung:
+nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv
+journalctl -k --since '10 min ago' | grep -iE 'NVRM|Xid'
+```

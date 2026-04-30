@@ -1,8 +1,48 @@
 # Day 7 Status — Semantic Target Navigation
 
-**Status:** Code-complete, awaiting on-robot acceptance. Builds with
+**Status:** Upper half (target selection) verified end-to-end in sim;
+lower half (approach goal planner + Nav2 NavigateToPose action client)
+is code-complete but awaiting Nav2 acceptance. Builds with
 `colcon build --packages-select go2_semantic_perception go2_bringup_sim`.
-Day 6 stack must be running and Nav2 `/navigate_to_pose` must be active.
+
+## Verification snapshot (Apr 30, 2026)
+
+End-to-end run with sim flags
+`--headless --no-lidar --rgb-resolution 640x480 --depth-resolution 320x240`
+plus `day6.launch.py target_frame:=odom` plus a manually launched
+`target_selector_node`:
+
+| Stage | Topic | Result |
+|---|---|---|
+| YOLOE 2D | `/detections` | 25.7 Hz, chair detected |
+| Depth projector | `/detections_3d` (odom frame) | flowing |
+| Semantic memory | `/semantic_map/objects` | 2 entities: `chair_001` (conf 0.998, 653 obs, visible), `desk_001` (YOLOE prompt synonym for the sim's table) |
+| Target selector | `/target/selected` | picks `chair_001`, score=1.567 (visible 1.0 + conf 1.0 + prox 0.222), `estimated_distance=3.51m`, frame `odom` |
+| Approach planner | `/semantic_goal/goal_pose`, `/navigate_to_pose` | **NOT YET RUN** — needs Nav2 active, which needs LiDAR `/scan`, which needs sim re-launched without `--no-lidar`. Code paths exercised by `colcon build` only. |
+
+Known cosmetic issues from this run (non-blocking, documented for the
+next session):
+
+* `chair_001.pose_map.position.z = -0.997m`, `desk_001.z = +2.681m`.
+  Both x/y are correct (Day 7 ring sampling is 2D so this doesn't
+  affect goal generation), but the z is biased by mask-median depth
+  hitting floor / ceiling pixels. Fix candidate: depth_projector to
+  use bbox-center + mask intersection rather than bbox-or-mask
+  median.
+* `SemanticEntity.size_xyz = (0,0,0)` for every entity. Aggregator
+  doesn't propagate `Detection3D.bbox.size` into the persistent
+  entity record. RViz cylinders are drawn at a fixed 0.15m radius
+  so this doesn't visibly hurt; still cosmetically wrong.
+* `desk_001` is YOLOE labeling the sim's table as 'desk' (both
+  prompts in the launch's `classes` list). Day 7's
+  `target_class:=chair` filter handles it correctly. Strip 'desk'
+  from prompts if the duplication confuses RViz markers.
+
+Sim run platform: NVIDIA RTX 5090 (sm_120) + driver 580.126.09 +
+Isaac Sim 5.1 + Ubuntu 24.04. **First-run cold shader compile is
+expensive** (15-25 min on a fully-cleared cache); subsequent runs
+with the cache warm boot in ~30s. See `docs/known_issues.md` for
+details.
 
 ## Goal
 
