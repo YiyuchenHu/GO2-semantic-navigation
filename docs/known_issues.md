@@ -351,5 +351,101 @@ ros2 topic echo --once /detections | head -100   # see InstanceMaskArray
 
 **Workaround for Day 7 acceptance**: do not block on this. The Day 7
 algorithm layer (target_selector + approach_goal_planner) works
-correctly given the perception output it sees. The end-to-end
-"Go2 actually drives to the chair" demo waits on this fix.
+correctly given the perception output it sees, and Go2 *does*
+visibly start driving toward the goal — it just doesn't reach it
+because the entity is pruned mid-traverse (see #9 below).
+
+### Update (2026-04-30, afternoon): partial fix landed
+
+The 90° rotation half of this bug (caused by `--qw +0.5` in
+`chair_perception.launch.py`'s `_OPTICAL_FRAME_ARGS`) is fixed in
+the `fix(day7): camera optical TF + approach planner marker spam`
+commit. After the fix, desk_001 projects to odom (8.4, -2.1) —
+direction is correct (forward + slight right of base_link, matching
+where the table actually is in the sim scene), but the magnitude is
+~9 m versus the geometric ground truth of ~5.7 m, i.e. a remaining
+~1.7× distance bias. That residual is the mask-edge-bleed half of
+the issue; candidate 2 above is still open.
+
+---
+
+## 9. ⚠️ Entity drops out of /semantic_map/objects mid-traverse
+
+**Status**: blocks the "Go2 actually reaches the chair" finale.
+Day 7 algorithm layer is unaffected (verified earlier this session
+that target_selector + approach_goal_planner + Nav2 NavigateToPose
+all behave correctly when an entity is present).
+
+**Symptom**: launch the full Day 7 stack with sim, nav2 active,
+chair_perception, and `day7.launch.py target_class:=desk
+target_frame:=odom`. target_selector picks `desk_001` immediately,
+approach_goal_planner sends a NavigateToPose action goal, and Go2
+visibly starts driving toward the desk's approach pose. **After
+~5–10 seconds of motion** Go2 stops:
+
+```
+ros2 topic echo --once /semantic_map/objects
+  entities: []                              ← empty
+
+ros2 topic echo --once /target/selected
+  entity_id: ''
+  ranking_reasons:
+    - "no entities with class='desk' and confidence>=0.3"
+```
+
+The selector goes empty → approach_goal_planner sees an empty
+target → it cancels the in-flight Nav2 goal → Nav2 stops emitting
+/cmd_vel → Go2 halts.
+
+**Root cause**: a chain of three perception-layer issues amplifying
+each other:
+
+1. As Go2 turns toward the goal-pose yaw (-45° in the test run),
+   the camera FOV swings off the desk; `currently_visible` flips
+   to False after `visibility_timeout_sec=2.0` s of no detection.
+2. Once invisible, the entity's confidence decays at
+   `confidence_decay_rate=0.05` per sec (`exp(-0.05·age_s)`),
+   crossing the selector's `min_confidence=0.30` floor in ~24 s.
+   By itself this would only matter if Go2 takes >24 s to turn
+   back, which is borderline but survivable.
+3. **The accelerator**: depth_projector mask-edge bleed (see #8)
+   makes each detection's projected XY drift several decimetres
+   between frames as the mask shape varies. When the drift exceeds
+   `nms_radius_m=0.3 m`, the aggregator creates a NEW entity_id
+   (e.g. `desk_002`, `desk_003`, …) instead of merging into
+   `desk_001`. The new entity starts at `confidence=step_up=0.15`,
+   which is BELOW the 0.30 selector floor. Each new id starts
+   from scratch, so confidence never accumulates, and after a few
+   short-lived tracks the registry is empty.
+
+**Quick band-aid (next session)**: tune the aggregator parameters
+to be more tolerant of projection jitter:
+
+```bash
+ros2 param set /semantic_memory_aggregator nms_radius_m 0.8
+ros2 param set /semantic_memory_aggregator confidence_decay_rate 0.02
+ros2 param set /semantic_memory_aggregator visibility_timeout_sec 5.0
+ros2 param set /target_selector min_confidence 0.20
+```
+
+These keep the entity registered through Go2's traverse on the
+existing perception output. They do NOT fix the underlying
+mask-edge bleed; they just hide it.
+
+**Real fix**: close out #8 candidate 2 (mask-edge bleed) so the
+3D position drift stays well under nms_radius_m even on the
+default 0.3 m. Then keep the original tighter parameters, which
+are more robust against tracking ghost objects in clutter.
+
+**Diagnostic recipe**: while Go2 is mid-traverse, watch the
+entity registry live:
+
+```bash
+# Keep this running and watch entities[] grow / shrink:
+ros2 topic echo /semantic_map/objects | grep -E 'entity_id|confidence|currently_visible|observations_count'
+```
+
+If you see `entity_id` cycling through `desk_001`, `desk_002`,
+`desk_003` while `observations_count` stays small (<5), that's
+diagnostic of the aggregator failing to merge across projection
+jitter.
