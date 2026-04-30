@@ -1,0 +1,21 @@
+targets:
+  chair:
+    aliases: ["chair", "seat", "stool"]
+    detector_labels: ["chair"]
+    approach_distance_m: 0.9
+  table:
+    aliases: ["table", "desk"]
+    detector_labels: ["table", "dining table"]
+    approach_distance_m: 1.0
+  person:
+    aliases: ["person", "human", "man", "woman"]
+    detector_labels: ["person"]
+    approach_distance_m: 1.2
+  door:
+    aliases: ["door", "gate", "entry"]
+    detector_labels: ["door"]
+    approach_distance_m: 1.1
+  cap:
+    aliases: ["cap", "hat"]
+    detector_labels: ["cap", "hat"]
+    approach_distance_m: 0.7

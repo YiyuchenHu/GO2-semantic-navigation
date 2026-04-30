@@ -1,0 +1,55 @@
+# Python dependencies for Go2 semantic navigation
+# =================================================
+#
+# Install:
+#   pip install --user -r requirements.txt
+#
+# Notes:
+#   * On Ubuntu 24.04 system Python is "externally managed" (PEP 668).
+#     The conventional workaround is `--user`, OR use the Isaac Sim
+#     conda env (managed by `scripts/isaac_conda_env.sh`).
+#   * `rclpy`, `cv_bridge`, and the `vision_msgs` Python bindings come
+#     from `apt install ros-jazzy-*` packages, NOT pip — they live
+#     under `/opt/ros/jazzy/lib/python3.12/site-packages/`.
+#   * `ultralytics>=8.3.0` is the minimum that has the YOLOE class.
+#     Day 5 was developed and verified on 8.4.45.
+#   * On first run `ultralytics` auto-downloads:
+#       - yoloe-11s-seg.pt (~27 MB)         — YOLOE segmentation weights
+#       - mobileclip_blt.ts (~572 MB)       — text-prompt encoder (CLIP)
+#     Pre-fetch with:
+#       python3 -c "from ultralytics import YOLOE; YOLOE('yoloe-11s-seg.pt')"
+#     The two files end up in your CWD or `~/.config/Ultralytics/`,
+#     and are .gitignored so they never enter the repo.
+
+# -----------------------------------------------------------------------------
+# Day 5 — YOLOE open-vocabulary detection
+# -----------------------------------------------------------------------------
+ultralytics>=8.3.0,<9
+# torch is a transitive dep of ultralytics. Pin to >=2.0 because YOLOE
+# uses torch.export semantics introduced after that. Day 5 verified on
+# torch 2.9.1.
+torch>=2.0
+torchvision>=0.15
+
+# -----------------------------------------------------------------------------
+# Day 1+ — image / array handling shared across phases
+# -----------------------------------------------------------------------------
+# Pin >=4.10 because cv_bridge in ROS Jazzy expects Python OpenCV's
+# array protocol matching numpy 2.x. Day 5 verified on 4.13.0.92.
+opencv-python>=4.10
+# numpy 2.x is the system default on Ubuntu 24.04. Some apt-installed
+# binaries (cv_bridge, certain rclpy extensions) were compiled against
+# numpy 1.x and crash with `numpy.core._multiarray_umath` ImportError.
+# See docs/known_issues.md for the workaround. We don't pin <2 here
+# because the YOLOE node works fine with numpy 2.x; the legacy chair
+# perception_node is the one that's broken.
+numpy>=1.26
+pillow>=10.0
+
+# -----------------------------------------------------------------------------
+# Optional: Isaac Sim's conda env ships a separate Python with its own
+# torch / numpy. Don't `pip install` into it — Isaac Sim's pip will
+# happily downgrade ML deps and break the renderer. Install the YOLOE
+# stack into your SYSTEM python (or a dedicated venv) and run the
+# yoloe_detector_node from THAT interpreter, separate from sim.
+# -----------------------------------------------------------------------------

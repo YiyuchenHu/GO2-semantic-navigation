@@ -1,0 +1,13 @@
+std_msgs/Header header
+string entity_id
+string class_label
+string display_name
+geometry_msgs/Pose pose_map
+geometry_msgs/Vector3 size_xyz
+float32 confidence
+int32 observations_count
+builtin_interfaces/Time first_seen
+builtin_interfaces/Time last_seen
+bool currently_visible
+bool is_dynamic
+float32 uncertainty

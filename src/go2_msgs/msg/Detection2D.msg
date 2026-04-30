@@ -1,0 +1,10 @@
+std_msgs/Header header
+string detection_id
+string class_id
+string class_label
+float32 score
+float32 xmin
+float32 ymin
+float32 xmax
+float32 ymax
+bool is_target_candidate

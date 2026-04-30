@@ -1,0 +1,37 @@
+isaac_sim_contract:
+  # Topics that the Phase 0 sim + chair_perception.launch.py together
+  # MUST advertise. Day 1-2 acceptance is "all of these flowing at the
+  # documented rates"; Day 3 SLAM and Day 4 Nav2 layers are built on
+  # top of this contract.
+  required_topics:
+    - /clock
+    - /tf
+    - /tf_static
+    - /odom
+    - /imu/data
+    - /camera/color/image_raw
+    - /camera/color/camera_info
+    - /camera/depth/image_rect_raw
+    - /camera/depth/camera_info
+    - /lidar/points              # PointCloud2 from RTX LiDAR (OS1-32 stand-in)
+    - /scan                      # LaserScan synthesised from /lidar/points
+                                 # via pointcloud_to_laserscan (chair_perception.launch.py)
+  # Reserved for future stages — not produced by Phase 0 today.
+  reserved_for_future_stage:
+    - /joint_states              # needs a real Go2 locomotion policy (Phase 5)
+    - /camera/depth/points       # depth -> PC2 conversion not wired yet
+    - /map                       # produced once slam_toolbox is online (Day 3)
+  frame_convention:
+    - map                        # introduced by slam_toolbox in Day 3
+    - odom
+    - base_link
+    - base_footprint
+    - imu_link
+    - camera_link
+    - camera_color_optical_frame
+    - camera_depth_optical_frame
+    - lidar_link
+    - fl_foot
+    - fr_foot
+    - rl_foot
+    - rr_foot

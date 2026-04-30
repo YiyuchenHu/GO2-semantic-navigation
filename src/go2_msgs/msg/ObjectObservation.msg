@@ -1,0 +1,14 @@
+std_msgs/Header header
+string observation_id
+string source_detection_id
+string class_label
+float32 confidence
+geometry_msgs/Point centroid_map
+geometry_msgs/Point centroid_base_link
+geometry_msgs/Vector3 size_xyz
+float32 depth_median
+float32 depth_p10
+float32 depth_p90
+float32 depth_valid_ratio
+float32 uncertainty
+bool currently_visible

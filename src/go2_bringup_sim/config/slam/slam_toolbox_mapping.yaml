@@ -1,0 +1,108 @@
+# Day 3 SLAM — slam_toolbox in ONLINE_ASYNC mapping mode.
+#
+# Tuned for:
+#   * Sensor: Ouster OS1-32 (10 Hz nominal, ~5 Hz effective in our sim
+#     after the GPU-shared RTX render product) → /lidar/points →
+#     pointcloud_to_laserscan → /scan (LaserScan)
+#   * Environment: 10m × 10m enclosed warehouse (sim/warehouse_scene.py)
+#   * Robot: Unitree Go2, base_link, ~0.7 m × 0.3 m footprint
+#   * Frames: odom (anchor of /odom), base_link (chassis), map (this
+#     node will publish map → odom)
+#
+# Mode choice:
+#   ONLINE_ASYNC > online_sync. async absorbs scan-rate jitter and
+#   doesn't block on stale scans, which our GPU-shared sim produces
+#   when the renderer dips. Sync mode would emit "Could not transform"
+#   warnings every time render falls behind.
+#
+# Loop closure:
+#   Enabled. Even though the warehouse is small, our Go2 will revisit
+#   the same wall corners often enough that loop closure cleans up the
+#   slow odom drift the kinematic /cmd_vel integrator accumulates.
+#
+# References:
+#   * https://github.com/SteveMacenski/slam_toolbox
+#   * REP-105 (Coordinate Frames for Mobile Platforms)
+
+slam_toolbox:
+  ros__parameters:
+    # ---- Solver ---------------------------------------------------
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ---- Frames & topics ------------------------------------------
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping
+
+    # ---- Time / publishing ----------------------------------------
+    debug_logging: false
+    throttle_scans: 1               # process every scan (we're already at ~5 Hz)
+    # transform_publish_period controls both publish RATE (1/period) and
+    # the "post-date" offset added to the TF stamp so it stays valid
+    # forward in time. Default 0.05 (20 Hz, +50 ms post-date) is tight
+    # for Nav2 in our sim — when slam_toolbox briefly stalls (loop
+    # closure / GPU contention) the latest TF is at sim_time T but the
+    # controller queries at T + a few ms, which tf2 rejects with
+    # "extrapolation into the future". Bumping to 0.1 (10 Hz, +100 ms
+    # post-date) gives controller_server's per-tick TF lookup more
+    # margin without flooding the network.
+    transform_publish_period: 0.1
+    map_update_interval: 1.0        # republish /map every 1.0 s
+    resolution: 0.05                # 5 cm cells — fine for 10m room
+    minimum_time_interval: 0.1      # min 100 ms between scan inserts
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000     # 40 MB serialization buffer for big graphs
+    enable_interactive_mode: true
+
+    # ---- Sensor model (must match OS1-32 stand-in) ----------------
+    # OS1-32 datasheet max range ≈ 120 m. We cap at 12 m so the SLAM
+    # cost function isn't dominated by long noisy returns. The
+    # warehouse diagonal is ~14 m, so 12 m still covers any visible
+    # wall from the centre of the room.
+    max_laser_range: 12.0
+    minimum_laser_range: 0.30
+
+    # ---- Scan matching --------------------------------------------
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.30   # insert keyframe every 30 cm of travel
+    minimum_travel_heading: 0.30    # insert keyframe every 17° of yaw
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.10
+    link_scan_maximum_distance: 1.50
+    do_loop_closing: true
+    loop_search_maximum_distance: 8.0
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # ---- Correlation parameters -----------------------------------
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.10
+
+    # ---- Loop-closure correlation ---------------------------------
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # ---- Scan matcher penalty parameters --------------------------
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349   # 0.2°
+    coarse_search_angle_offset: 0.349   # 20°
+    coarse_angle_resolution: 0.0349     # 2°
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true

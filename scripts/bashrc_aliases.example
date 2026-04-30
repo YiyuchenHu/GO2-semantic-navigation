@@ -1,0 +1,29 @@
+# -----------------------------------------------------------------------------
+# Suggested block for ~/.bashrc — GO2 semantic navigation (copy paths to match yours)
+# After editing, run:  source ~/.bashrc
+# -----------------------------------------------------------------------------
+
+# Absolute path to this repository (set once)
+export GO2_SEMANTIC_NAV_ROOT="/home/yiyuchenhu/Desktop/2026spring/2026spring/CINQ389/GO2/GO2-semantic-navigation"
+
+# cd into project
+alias go2proj='cd "${GO2_SEMANTIC_NAV_ROOT}"'
+
+# One-command launches (each script sources dev_env and sets ros2 in that subshell)
+alias go2isaac='bash "${GO2_SEMANTIC_NAV_ROOT}/scripts/run_isaacsim.sh"'
+alias go2stack='bash "${GO2_SEMANTIC_NAV_ROOT}/scripts/run_go2_stack.sh"'
+alias go2rviz='bash "${GO2_SEMANTIC_NAV_ROOT}/scripts/run_rviz.sh"'
+alias go2all='bash "${GO2_SEMANTIC_NAV_ROOT}/scripts/run_all.sh"'
+alias go2tmux='bash "${GO2_SEMANTIC_NAV_ROOT}/scripts/run_tmux.sh"'
+
+# Optional: in any shell, get ROS+workspace in the *current* shell (fixes "ros2: not found")
+go2env() { # shellcheck disable=SC1091
+  if [ -f "${GO2_SEMANTIC_NAV_ROOT}/scripts/dev_env.sh" ]; then
+    # shellcheck source=dev_env.sh
+    source "${GO2_SEMANTIC_NAV_ROOT}/scripts/dev_env.sh" && \
+      echo "OK: sourced dev_env (ROS + workspace) for ${GO2_SEMANTIC_NAV_ROOT}"
+  else
+    echo "Missing ${GO2_SEMANTIC_NAV_ROOT}/scripts/dev_env.sh" >&2
+    return 1
+  fi
+}

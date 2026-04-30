@@ -1,0 +1,451 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 70
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /TF1/Frames1
+        - /LaserScan1
+        - /PointCloud2 (LiDAR)1
+      Splitter Ratio: 0.5
+    Tree Height: 540
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+
+Visualization Manager:
+  Class: ""
+  Displays:
+
+    # ---- Reference grid (10 m, 1 m squares) ---------------------------------
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Reference Frame: odom
+      Plane: XY
+      Plane Cell Count: 10
+      Cell Size: 1.0
+      Color: 160; 160; 164
+      Alpha: 0.5
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+
+    # ---- Day 3 SLAM / Day 4 Nav2 static map --------------------------------
+    # In Day 3 mode (mapping.launch.py running) /map is published by
+    # slam_toolbox at ~1 Hz with TRANSIENT_LOCAL durability.
+    # In Day 4 mode (nav2.launch.py running) /map is published by
+    # nav2_bringup's map_server, also TRANSIENT_LOCAL — same display works.
+    #
+    # Critical: do NOT set Update Topic here. Day 4 map_server never
+    # publishes /map_updates, but if RViz has it configured the Map
+    # display routes the main /map through a Message Filter that
+    # requires both the main message AND a TF lookup at the message's
+    # original stamp. Because /map is TRANSIENT_LOCAL, RViz subscribes
+    # AFTER map_server activation and receives the latched message
+    # with its OLD stamp (the moment map_server activated). At that
+    # stamp the AMCL TF buffer for `map` frame is empty, so the
+    # message filter drops the message and Map (static) shows
+    # "No map received" forever. Removing Update Topic disables the
+    # filter and the map renders the moment it arrives. Day 3
+    # slam_toolbox does publish /map_updates but losing them is
+    # cosmetic — the new full /map at 1 Hz overwrites the prior frame.
+    - Class: rviz_default_plugins/Map
+      Name: Map (static)
+      Enabled: true
+      Topic:
+        Value: /map
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Alpha: 0.7
+      Color Scheme: map
+      Draw Behind: true
+      Use Timestamp: false
+      Value: true
+
+    # ---- Day 4 Nav2: global costmap (planner_server's view) ---------------
+    # Tinted blue/purple overlay over the static map. Bright purple "halo"
+    # around walls = inflation_layer (cost_scaling_factor + inflation_radius).
+    # If costmap doesn't visually align with the static map, your
+    # `map → odom` from AMCL hasn't converged — re-init via 2D Pose Estimate.
+    - Class: rviz_default_plugins/Map
+      Name: Costmap (global)
+      Enabled: true
+      Topic:
+        Value: /global_costmap/costmap
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Alpha: 0.5
+      Color Scheme: costmap
+      Draw Behind: false
+      Use Timestamp: false
+      Value: true
+
+    # ---- Day 4 Nav2: local costmap (4×4 m rolling window) -----------------
+    - Class: rviz_default_plugins/Map
+      Name: Costmap (local)
+      Enabled: true
+      Topic:
+        Value: /local_costmap/costmap
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Alpha: 0.5
+      Color Scheme: costmap
+      Draw Behind: false
+      Use Timestamp: false
+      Value: true
+
+    # ---- Day 4 Nav2: global plan (planner_server output) ------------------
+    - Class: rviz_default_plugins/Path
+      Name: Plan (global)
+      Enabled: true
+      Topic:
+        Value: /plan
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Color: 25; 255; 100      # bright green
+      Alpha: 1.0
+      Buffer Length: 1
+      Line Style: Lines
+      Line Width: 0.04
+      Pose Style: None
+
+    # ---- Day 4 Nav2: local plan (controller_server output, what Go2 follows)
+    - Class: rviz_default_plugins/Path
+      Name: Plan (local)
+      Enabled: true
+      Topic:
+        Value: /local_plan
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Color: 255; 25; 100      # bright red
+      Alpha: 1.0
+      Buffer Length: 1
+      Line Style: Lines
+      Line Width: 0.05
+      Pose Style: None
+
+    # ---- Day 4 Nav2: AMCL particle cloud ----------------------------------
+    # Tight cluster (< 0.3 m spread) = AMCL is converged. A diffuse cloud
+    # means localization isn't locked yet — drive in a circle to disambiguate.
+    - Class: rviz_default_plugins/PoseArray
+      Name: AMCL particles
+      Enabled: true
+      Topic:
+        Value: /particle_cloud
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Arrow Length: 0.15
+      Color: 0; 200; 255       # cyan
+      Shape: Arrow (Flat)
+      Alpha: 1.0
+
+    # ---- Day 4 Nav2: robot footprint (the polygon Nav2 plans around) ------
+    - Class: rviz_default_plugins/Polygon
+      Name: Footprint (local)
+      Enabled: true
+      Topic:
+        Value: /local_costmap/published_footprint
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Color: 25; 255; 0
+      Alpha: 1.0
+
+    # ---- TF tree (odom / base_link / camera / imu / lidar / optical) -------
+    # Marker Scale 0.8 so the optical / imu / lidar frames don't stack on
+    # top of each other into an unreadable cluster at the body origin.
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Update Interval: 0
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Marker Scale: 0.8
+      Filter (blacklist): ""
+      Filter (whitelist): ""
+      Frame Timeout: 15
+      Tree:
+        odom:
+          base_link:
+            camera_link:
+              {}
+            camera_color_optical_frame:
+              {}
+            camera_depth_optical_frame:
+              {}
+            imu_link:
+              {}
+            lidar_link:
+              {}
+
+    # ---- 2D /scan (the input slam_toolbox will eat) -------------------------
+    # IMPORTANT: pointcloud_to_laserscan publishes BEST_EFFORT (sensor_data
+    # convention), but RViz subscribers default to RELIABLE — that's
+    # INCOMPATIBLE and silently drops every scan. Override to Best Effort
+    # here. Best-Effort subscribers also accept Reliable publishers, so
+    # this works regardless of which side the publisher chooses.
+    #
+    # Color Transformer = FlatColor (bright red) instead of Intensity,
+    # because Isaac's RTX LiDAR ScanBuffer doesn't populate the intensity
+    # field by default → an Intensity-coloured scan renders invisible.
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Depth: 5
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 6
+      Size (m): 0.06
+      Alpha: 1.0
+      Color Transformer: FlatColor
+      Color: 255; 60; 60
+      Decay Time: 0
+      Position Transformer: XYZ
+      Selectable: true
+      Queue Size: 10
+
+    # ---- 3D /lidar/points (full Ouster OS1-32 cloud) ------------------------
+    # Same Best-Effort override so we accept both Reliable (Isaac's RTX
+    # LiDAR writer publishes Reliable) and any future Best-Effort
+    # republishers without further config.
+    - Class: rviz_default_plugins/PointCloud2
+      Name: PointCloud2 (LiDAR)
+      Enabled: true
+      Topic:
+        Value: /lidar/points
+        Depth: 5
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 3
+      Size (m): 0.04
+      Alpha: 0.8
+      Color Transformer: AxisColor
+      Axis: Z
+      Autocompute Value Bounds: true
+      Min Value: -1
+      Max Value: 2
+      Decay Time: 0
+      Position Transformer: XYZ
+      Selectable: true
+      Queue Size: 10
+      Use rainbow: true
+      Invert Rainbow: false
+
+    # ---- Front camera RGB — flat 2D image panel ----------------------------
+    # The Image display creates a dockable 2D panel that renders
+    # /camera/color/image_raw straight from the bridge. No TF lookup, no
+    # render-product games — useful for "is the camera actually seeing the
+    # warehouse" sanity checks.
+    - Class: rviz_default_plugins/Image
+      Name: Image (RGB)
+      Enabled: true
+      Topic:
+        Value: /camera/color/image_raw
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Median window: 5
+      Min Value: 0
+      Max Value: 1
+      Normalize Range: true
+      Queue Size: 2
+
+    # ---- Day 5: YOLOE detection overlay ------------------------------------
+    # /detections/image is the input RGB frame with green bboxes,
+    # class-name + score labels, and (on -seg weights) a translucent
+    # red instance mask painted on top. Day 5 acceptance is mostly
+    # eyeballing this panel.
+    #
+    # Why a SEPARATE Image display from "Image (RGB)" above:
+    #   * Operator workflow distinguishes "camera live feed" (bare
+    #     RGB) from "what the model thinks it sees" (overlay).
+    #   * Disabling YOLOE inference (publish_overlay:=false) only
+    #     blanks this panel — the bare RGB stays readable.
+    # Disabled by default so RViz doesn't error-spam at boot when
+    # YOLOE isn't running yet (e.g. when the operator launches just
+    # the sim + nav2 stack); flip the checkbox once you start the
+    # yoloe_detector_node.
+    - Class: rviz_default_plugins/Image
+      Name: Image (YOLOE detections)
+      Enabled: false
+      Topic:
+        Value: /detections/image
+        Depth: 1
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Median window: 5
+      Min Value: 0
+      Max Value: 1
+      Normalize Range: true
+      Queue Size: 2
+
+    # ---- Front camera RGB — 3D-projected (off by default) ------------------
+    # The Camera display takes the same /camera/color/image_raw but projects
+    # it INTO the 3D scene using camera_info K and the camera_link TF chain.
+    # Useful for visually confirming RGB-D <-> LaserScan alignment, but
+    # disabled by default because it overlays everything else.
+    - Class: rviz_default_plugins/Camera
+      Name: Camera (RGB, 3D-projected)
+      Enabled: false
+      Topic:
+        Value: /camera/color/image_raw
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Image Rendering: background and overlay
+      Overlay Alpha: 0.5
+      Visibility:
+        Grid: true
+        TF: true
+        LaserScan: true
+        PointCloud2 (LiDAR): true
+        Image (RGB): true
+        Value: true
+      Zoom Factor: 1
+
+  Enabled: true
+
+  Global Options:
+    Background Color: 48; 48; 48
+    Default Light: true
+    # Fixed Frame: map for Day 4+ (Nav2 / AMCL stack). Static map +
+    # global_costmap are in `map`. AMCL provides map → odom; sim
+    # provides odom → base_link. Switching Fixed Frame to `odom`
+    # is fine for Day 1-3 (no map yet) but hides the AMCL drift
+    # in Day 4. If you want to see Day 1-3 layout, change at
+    # runtime via Global Options panel — no need to edit config.
+    Fixed Frame: map
+    Frame Rate: 30
+
+  Name: root
+
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+    # Day 4 Nav2 tools — toolbar buttons to set goals + initial pose.
+    # SetGoal sends a PoseStamped on /goal_pose, which BT navigator
+    # ingests via NavigateToPose action. SetInitialPose publishes a
+    # PoseWithCovarianceStamped on /initialpose for AMCL to reset
+    # its particle filter (use this if AMCL diverges or boots to the
+    # wrong location).
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Value: /initialpose
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Covariance x: 0.25
+      Covariance y: 0.25
+      Covariance yaw: 0.0685   # ≈ 15° squared
+
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+
+  Value: true
+
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      # Go2 spawns at world (-4, -4, 0.55) but `odom` is anchored at the
+      # spawn pose, so in odom Fixed Frame the robot starts at (0, 0, 0).
+      # Centre the orbit there so the LaserScan ring + walls are framed.
+      Distance: 8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Near Clip Distance: 0.01
+      Pitch: 0.55
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.78
+    Saved:
+      - Class: rviz_default_plugins/Orbit
+        Name: Top-Down (warehouse)
+        Distance: 12
+        Focal Point:
+          X: 0
+          Y: 0
+          Z: 0
+        Pitch: 1.5707
+        Yaw: 1.5707
+        Target Frame: odom
+      - Class: rviz_default_plugins/ThirdPersonFollower
+        Name: Follow Go2
+        Distance: 4
+        Pitch: 0.4
+        Target Frame: base_link
+        Yaw: 3.14
+
+# ---- Image panel docked on the right ---------------------------------------
+# This is a separate "Image" PANEL (not a 3D Display) — it always shows the
+# raw /camera/color/image_raw at the actual frame rate, regardless of TF.
+
+Window Geometry:
+  Displays:
+    collapsed: false
+  Selection:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Height: 900
+  Width: 1600
+  X: 100
+  Y: 100
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd00000004000000000000016a000002b0fc0200000008fb0000001200530065006c0065006300740069006f006e00000000280000010f0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000000280000017d0000005c00fffffffb000000120056006900650077007300000001ad0000012b0000009800fffffffb0000000a00440069007300700061007900730100000028000002b0000000c700ffffff0000000100000150000003a8fc0200000003fb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000000410000037800000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000007800000003efc0100000002fb0000000800540069006d006500000000000000078000000241000000fffffffffb0000000800540069006d00650100000000000004500000000000000000000004fa000002b000000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000

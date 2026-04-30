@@ -1,0 +1,9 @@
+std_msgs/Header header
+string task_id
+string entity_id
+string class_label
+geometry_msgs/Pose target_pose_map
+float32 score
+bool reachable
+float32 estimated_distance
+string[] ranking_reasons

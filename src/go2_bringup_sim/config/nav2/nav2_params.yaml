@@ -1,0 +1,462 @@
+# Day 4 — Nav2 minimum-viable parameters for the Go2 + warehouse MVP.
+#
+# Tuned for:
+#   * Map: maps/warehouse_v1.yaml (saved by Day 3 slam_toolbox)
+#   * LiDAR: Ouster OS1-32 (10 Hz nominal, ~5 Hz effective) at /scan
+#   * Robot: Unitree Go2, ~0.65 m × 0.30 m footprint, ~0.35 m radius circle
+#   * Frames: map (from AMCL) → odom (from sim) → base_link (from sim)
+#   * Output: /cmd_vel (geometry_msgs/Twist, body frame) consumed by the
+#     sim's KinematicLocomotionBackend (sim/locomotion_backends.py).
+#
+# Mode: localization-only (AMCL on a pre-built map). slam_toolbox MUST
+# NOT be running concurrently; both AMCL and slam_toolbox publish
+# `map → odom` and would fight.
+#
+# Numbered "knob" comments mark the four parameters worth touching first
+# if behaviour is wrong. Everything else is intentionally generic Nav2
+# defaults so we can debug the framework, not the tuning.
+
+amcl:
+  ros__parameters:
+    use_sim_time: true
+    base_frame_id: base_link
+    odom_frame_id: odom
+    global_frame_id: map
+    scan_topic: /scan
+
+    # AMCL `transform_tolerance` is ADDED to the broadcast TF stamp,
+    # so a value of 5.0 means broadcasts are stamped 5 s in the
+    # future. We set it small (default 1.0) — bumping it higher made
+    # global_costmap fail with "Requested time X but earliest data
+    # is at time X+5" because the future-stamped TFs aren't queriable
+    # for the present moment. Real fix for our /scan reliability is
+    # upstream (sim or pointcloud_to_laserscan), not AMCL tolerance.
+    transform_tolerance: 1.0
+    tf_broadcast: true
+
+    # The warehouse is small; fewer particles converge faster and use
+    # less CPU. Bump these up if the kidnapped-robot problem appears
+    # (e.g. teleoperation in an empty room and AMCL loses lock).
+    min_particles: 200
+    max_particles: 1000
+
+    # Sim odom is much cleaner than real odom (kinematic integrator),
+    # so trust it heavily. Real-robot deployment should bump alphas to
+    # 0.2-0.4.
+    alpha1: 0.1   # rotational noise from rotational motion
+    alpha2: 0.1   # rotational noise from translational motion
+    alpha3: 0.1   # translational noise from translational motion
+    alpha4: 0.1   # translational noise from rotational motion
+    alpha5: 0.1   # translational noise (omnidirectional)
+
+    # Match OS1's effective range cap from Day 3 (slam_toolbox config
+    # uses 12 m too; keeping these in lock-step avoids "AMCL sees beams
+    # past the map's known extent" warnings).
+    laser_max_range: 12.0
+    laser_min_range: 0.1
+    max_beams: 60
+
+    # likelihood_field is the standard for indoor static maps. The
+    # alternative beam_skip / beam models are tuned for outdoor /
+    # noisy LiDAR.
+    laser_model_type: likelihood_field
+
+    # Update only after the robot has actually moved, otherwise AMCL
+    # spends CPU re-running the filter on identical scans.
+    update_min_a: 0.2     # 11.5°
+    update_min_d: 0.25    # 25 cm
+
+    # Initial pose: Go2 spawns at world (-4, -4) but `odom` frame is
+    # anchored AT the spawn pose, so in `odom` Go2 starts at (0, 0).
+    # AMCL needs a `map → odom` transform — at boot time, before AMCL
+    # has localised, we tell it "Go2 is roughly at the map origin".
+    # The map's origin (warehouse_v1.yaml) was placed by map_saver at
+    # (-4.971, -7.085) world, so map_x ≈ +4.971 corresponds to world
+    # x = 0 ≈ Go2 spawn. We initialise the particle cloud near where
+    # save_map.sh would have caught Go2 — close enough for AMCL to
+    # converge after a few /scan messages.
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    # `transform_tolerance` controls how much past TF data
+    # bt_navigator will accept when checking robot pose at goal
+    # arrival. Default 0.1s is too tight for our setup because
+    # slam_toolbox publishes TFs slightly future-stamped and the
+    # tf2 buffer (default cache 10s) purges old TFs while Go2 is
+    # at rest. With 5.0s we accept TFs up to 5 seconds old, which
+    # masks the gap. We also bump tf2 listener buffer length so
+    # buffered TFs aren't pruned mid-lookup.
+    transform_tolerance: 5.0
+    # Holds /tf history this many seconds in bt_navigator's tf2
+    # buffer (default 10s). Increase so old TFs aren't pruned
+    # while bt_navigator is mid-tick on a goal.
+    bt_loop_duration: 10
+    # Empty string would load NOTHING in Nav2 Jazzy (BT throws
+    # "Empty Tree. Exiting with failure" the moment a goal arrives,
+    # action returns error_code=0). Point at the standard navigation
+    # BT shipped with nav2_bt_navigator. This is the same file
+    # nav2_bringup uses by default.
+    default_nav_to_pose_bt_xml: "/opt/ros/jazzy/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
+    default_nav_through_poses_bt_xml: "/opt/ros/jazzy/share/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml"
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # KNOB #4 — arrival tolerance.
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.5
+      stateful: true
+
+    # Regulated Pure Pursuit — recommended for differential / quadruped
+    # platforms where smooth velocity profile matters. RPP slows down
+    # near obstacles and on tight curves, which is what we want for
+    # Go2 in a 10×10 m room.
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # KNOB #2 — controller's target speed. Stay below the kinematic
+      # backend's --max-lin (1.0 m/s default).
+      desired_linear_vel: 0.5
+      lookahead_dist: 0.6
+      min_lookahead_dist: 0.3
+      max_lookahead_dist: 0.9
+      use_velocity_scaled_lookahead_dist: true
+      transform_tolerance: 1.0
+      use_cost_regulated_linear_velocity_scaling: true
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.25
+      use_rotate_to_heading: true
+      rotate_to_heading_min_angle: 0.785   # 45°
+      max_angular_accel: 1.5
+      max_robot_pose_search_dist: 10.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      # KNOB #1 — Go2 footprint approximation. Real Go2 EDU is
+      # 0.65 m × 0.30 m; circular approximation with 0.35 m gives a
+      # conservative buffer.
+      robot_radius: 0.35
+
+      plugins: ["obstacle_layer", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.0
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # KNOB #3 — too small → planner cuts corners and Go2 brushes
+        # walls. Too large → no valid path through 1.5 m corridors.
+        # 0.5 m is appropriate for 10 m × 10 m warehouse.
+        inflation_radius: 0.5
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      robot_radius: 0.35
+      resolution: 0.05
+      # When the localization backend is slam_toolbox in mapping mode,
+      # /map is BUILT incrementally — at goal-time most cells outside
+      # the LiDAR's recent FOV are still `unknown` (-1). With
+      # track_unknown_space=true those become lethal in the costmap and
+      # the planner's allow_unknown=false then refuses to route through
+      # them. Result: every distant goal aborts with error_code=0
+      # before ComputePathToPose. Setting this false treats unknown as
+      # FREE in the costmap. Combined with allow_unknown=true on the
+      # planner, the planner can route into unmapped space and let the
+      # local costmap + obstacle_layer / collision_monitor stop Go2 if
+      # there's a real obstacle there.
+      # Switch back to true on real hardware where the static map is
+      # fully known via map_server.
+      track_unknown_space: false
+
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        # warehouse_v1.yaml is loaded by map_server with TRANSIENT_LOCAL
+        # durability so this matches the publisher's QoS.
+        map_subscribe_transient_local: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 10.0
+          obstacle_max_range: 8.0
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.5
+
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    # yaml_filename injected by launch via a parameter override —
+    # this default empty string would error at runtime.
+    yaml_filename: ""
+    topic_name: /map
+    frame_id: map
+
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5
+      use_astar: true       # A* over Dijkstra for the small warehouse
+      # See global_costmap track_unknown_space comment: with the
+      # slam_toolbox backend most of the map is unknown at boot, so
+      # we have to allow_unknown=true or planner_server returns no
+      # path and BT aborts (error_code=0).
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    transform_tolerance: 1.0
+    global_frame: odom
+    robot_base_frame: base_link
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    # vx, vy, wz — Go2 is differential, vy MUST be 0.
+    max_velocity: [0.5, 0.0, 1.0]
+    min_velocity: [-0.5, 0.0, -1.0]
+    max_accel: [1.0, 0.0, 2.0]
+    max_decel: [-1.0, 0.0, -2.0]
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+# ----------------------------------------------------------------------------
+# nav2_bringup's navigation_launch.py (Jazzy) spins up MORE components
+# than the classic 7-node Nav2 stack: collision_monitor, smoother_server,
+# route_server, waypoint_follower, docking_server. If ANY of them fails
+# to configure, the lifecycle_manager_navigation aborts and EVERY
+# navigation node stays at `inactive`, including bt_navigator (which
+# advertises /navigate_to_pose). That's why a missing `observation_sources`
+# on collision_monitor takes down the whole stack.
+#
+# Below are minimum-viable configs for the components we don't actually
+# use in MVP. They activate cleanly and do nothing (empty polygons /
+# graphs / waypoint queues), so the lifecycle manager passes and the
+# servers we DO need (controller, planner, behavior, bt_navigator)
+# get to `active`.
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# collision_monitor — copied verbatim from nav2_bringup's official sample
+# (/opt/ros/jazzy/share/nav2_bringup/params/nav2_params.yaml) with two
+# changes: base_frame_id from "base_footprint" → "base_link" (we don't
+# publish base_footprint), and use_sim_time added.
+#
+# WHY copy verbatim instead of authoring our own minimal config?
+# collision_monitor's configure() doesn't tolerate missing polygons —
+# without at least one defined polygon (FootprintApproach below), it
+# fails to init and lifecycle_manager_navigation aborts the whole
+# navigation-side bringup. With FootprintApproach + empty docks, the
+# monitor stays effectively passive: it never blocks cmd_vel because
+# no obstacle ever falls inside the projected footprint trajectory in
+# MVP testing.
+# ----------------------------------------------------------------------------
+collision_monitor:
+  ros__parameters:
+    use_sim_time: true
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 1.0
+    # CRITICAL for the Isaac Sim setup: /scan is at ~4 Hz with
+    # occasional 14-second stalls under GPU contention (RTX LiDAR
+    # competes with cameras for renderer time). Default
+    # source_timeout=1.0s makes collision_monitor flag the source
+    # as "stale" the moment a /scan stutter exceeds 1 s, then it
+    # OVERRIDES /cmd_vel with zero (stop). Symptom: planner produces
+    # a path, controller_server publishes /cmd_vel_smoothed, but
+    # /cmd_vel stays at zero so Go2 doesn't move; navigation_time
+    # ticks up, no progress, action ABORTS with FollowPath error
+    # code 202. Bump source_timeout to 15 s so a 14-s stall doesn't
+    # zero the velocity. On real hardware with reliable 10 Hz scan,
+    # drop back to 1.0.
+    source_timeout: 15.0
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: false
+      enabled: true
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "scan"        # nav2 default uses relative; works with our remap
+      min_height: 0.15
+      max_height: 2.0
+      enabled: true
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: true
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: true
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200
+
+# Route_server: we don't use the route graph layer in MVP, but it has
+# to configure cleanly. Mirror nav2_bringup's default minus the geojson
+# file path (which is set by launch defaults).
+route_server:
+  ros__parameters:
+    use_sim_time: true
+    boundary_radius_to_achieve_node: 1.0
+    radius_to_achieve_node: 2.0
+    smooth_corners: true
+    operations: ["AdjustSpeedLimit", "ReroutingService"]
+    ReroutingService:
+      plugin: "nav2_route::ReroutingService"
+    AdjustSpeedLimit:
+      plugin: "nav2_route::AdjustSpeedLimit"
+    edge_cost_functions: ["DistanceScorer"]
+    DistanceScorer:
+      plugin: "nav2_route::DistanceScorer"
+
+# docking_server: we don't use docking in MVP, but it has to configure.
+# Copy the official sample's `simple_charging_dock` plugin slot — it
+# never actually fires because we never call /dock_robot. The plugin
+# registration is just to satisfy the lifecycle configure step.
+docking_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 50.0
+    initial_perception_timeout: 5.0
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.1
+    max_retries: 3
+    base_frame: "base_link"
+    fixed_frame: "odom"
+    dock_backwards: false
+    dock_prestaging_tolerance: 0.5
+    dock_plugins: ["simple_charging_dock"]
+    simple_charging_dock:
+      plugin: "opennav_docking::SimpleChargingDock"
+      docking_threshold: 0.05
+      staging_x_offset: -0.7
+      use_external_detection_pose: false
+      use_battery_status: false
+      use_stall_detection: false
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      v_linear_min: 0.15
+      v_linear_max: 0.15
+      use_collision_detection: true
+      costmap_topic: "local_costmap/costmap_raw"
+      footprint_topic: "local_costmap/published_footprint"
+      transform_tolerance: 1.0
+      projection_time: 5.0
+      simulation_step: 0.1
+      dock_collision_threshold: 0.3
