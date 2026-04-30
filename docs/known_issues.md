@@ -6,49 +6,53 @@ land Week 2+ work.
 
 ---
 
-## 1. ❗ Legacy `perception_node` crashes on import (numpy ABI mismatch)
+## 1. ✓ FIXED: Legacy `perception_node` cv_bridge import was broken on numpy 2.x
 
-**Status**: known-broken since Day 5; **not fixed**, deprecated.
+**Status**: **fixed** by `scripts/install_ml_deps.sh` +
+`scripts/pip-constraints.txt`.  Was a symptom of cv_bridge's numpy
+1.x ABI being shadowed by a user-site numpy 2.x install.
 
-**Symptom**: launching `chair_perception.launch.py` crashes the
-`perception_node` and `object_localizer_3d_node` processes with:
+**Original symptom**: launching `chair_perception.launch.py` crashed
+the `perception_node` and `object_localizer_3d_node` processes with:
 
 ```
 ImportError: A module that was compiled using NumPy 1.x cannot be
 run in NumPy 2.4.4
 ```
 
-immediately after the `from cv_bridge import CvBridge` import.
+immediately after `from cv_bridge import CvBridge`.
 
-**Root cause**: Ubuntu 24.04's default Python ships numpy 2.x, but
-the `ros-jazzy-cv-bridge` apt package was compiled against numpy 1.x.
-Python doesn't allow loading a 1.x C extension into a 2.x runtime;
-import fails before any user code runs. The `perception_node`
-imports cv_bridge directly, so it dies on startup. The newer
-`yoloe_detector_node` (Day 5) imports cv_bridge too but it tolerates
-both numpy versions — apparently because ultralytics' own torch
-loader was compiled against numpy 2.x and "wins" the resolution
-order.
+**Root cause**: pip in `~/.local/lib/python3.12/site-packages/`
+pulled in numpy 2.x as a transitive dep of (e.g.) `ultralytics`,
+`opencv-python`, or `torch`.  Python's `sys.path` resolution puts
+the user-site numpy ahead of the apt-installed numpy 1.26 that
+`ros-jazzy-cv-bridge`'s C extension was compiled against.  Loading
+the 1.x extension into a 2.x runtime is forbidden; import dies
+before any user code runs.
 
-**Why we are not fixing it**: the chair-only `perception_node` is
-the **deprecated** Phase 1 detector. Day 5's `yoloe_detector_node`
-is its open-vocabulary replacement and publishes a richer, standard-
-vision_msgs payload. From Day 6 onwards the project consumes
-`/detections` (YOLOE) instead of `/perception/detections_2d`
-(legacy). We keep the legacy launch in the tree for archeology /
-fallback only.
+**The fix** (`scripts/install_ml_deps.sh`):
 
-**Workarounds if you actually need the legacy pipeline**:
+`scripts/pip-constraints.txt` declares a hard cap
+`numpy<2,>=1.26`. The installer script invokes pip with
+`-c scripts/pip-constraints.txt` (or `PIP_CONSTRAINT=...` env
+var), so pip is forbidden from upgrading numpy past 1.26 even
+when a freshly-released ultralytics version requests it.  Re-run
+`bash scripts/install_ml_deps.sh --check` after any
+`pip install`/`pip install -U` to confirm the cap is still in
+effect.
 
-1. `pip install --user --break-system-packages 'numpy<2'` —
-   downgrades the user-site numpy. The cleanest fix; risks
-   conflicting with ultralytics on the same Python.
-2. Source-build `ros-jazzy-cv-bridge` against numpy 2.x. Painful;
-   only worth it if you also need the legacy stack to coexist with
-   YOLOE in the same process.
-3. Run the legacy chair pipeline inside the Isaac Sim conda env
-   (which ships its own numpy 1.x). Untested by us; documented
-   here for completeness.
+**Operational consequence**: any new pip install of an ML library
+in this project must go through `install_ml_deps.sh` (or at least
+respect the constraints file) until ROS Jazzy ships a cv_bridge
+built against numpy 2.x.  Bumping the constraint is a deliberate
+act, gated on verifying cv_bridge import in a clean env.
+
+**Why this hit us specifically and not every Jazzy user**: most
+people don't have a YOLOE / torch / numpy stack in `~/.local/`.
+The combination of (Ubuntu 24.04 PEP 668) + (system Python) +
+(pip --user --break-system-packages for ML deps) is what creates
+the shadowing.  Conda envs that vendor their own everything (Isaac
+Sim's bundled Python) don't see the issue.
 
 ---
 

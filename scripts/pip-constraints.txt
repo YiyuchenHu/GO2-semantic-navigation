@@ -1,0 +1,23 @@
+# -----------------------------------------------------------------------------
+# Pip version constraints for the GO2 semantic navigation ML stack.
+#
+# Why this file exists:
+#   ROS Jazzy on Ubuntu 24.04 uses /usr/bin/python3 (3.12) and ships
+#   `ros-jazzy-cv-bridge` whose C extension is compiled against numpy 1.26's
+#   ABI. If pip ever pulls numpy>=2 into ~/.local/lib/python3.12/site-packages,
+#   that 2.x numpy *shadows* the apt one in sys.path and cv_bridge_boost.so
+#   segfaults at import (exit -11 / SIGSEGV).
+#
+# Usage:
+#   1) One-shot: pass via -c
+#        pip install -c scripts/pip-constraints.txt --user --break-system-packages \
+#                    "ultralytics>=8.4.45"
+#   2) Persistent (recommended): export PIP_CONSTRAINT in dev_env.sh / ~/.bashrc
+#        export PIP_CONSTRAINT="$PROJECT_ROOT/scripts/pip-constraints.txt"
+#
+# Bump this file deliberately when (and only when) you've verified the new
+# version against ros-jazzy-cv-bridge's numpy ABI.
+# -----------------------------------------------------------------------------
+
+# Hard cap: must stay <2 until ROS Jazzy ships a cv_bridge built on numpy 2.x.
+numpy<2,>=1.26

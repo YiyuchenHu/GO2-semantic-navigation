@@ -405,11 +405,28 @@ docs/                                 phase status documents (source of truth)
 
 ## Python environment
 
-Day 5 added pip-side dependencies (`ultralytics`, `torch`,
-`opencv-python`, ...). See [`requirements.txt`](requirements.txt)
-for the pinned set with notes on Ubuntu 24.04 PEP 668 +
-`--break-system-packages` quirks and on the YOLOE / MobileCLIP
-auto-download behaviour.
+Day 5 added pip-side dependencies (`ultralytics`, `torch`, `clip`,
+...). The recommended install:
+
+```bash
+bash scripts/install_ml_deps.sh
+```
+
+That script wraps `pip install --user --break-system-packages` with
+[`scripts/pip-constraints.txt`](scripts/pip-constraints.txt) — a
+**numpy `<2,>=1.26` hard cap** that prevents pip from pulling a
+numpy 2.x into `~/.local/...` that would shadow the apt-installed
+`ros-jazzy-cv-bridge`'s numpy 1.x ABI and segfault every node that
+imports cv_bridge.  Without the constraint, the legacy
+`perception_node` and `object_localizer_3d_node` crash on import.
+See [`docs/known_issues.md` #1](docs/known_issues.md) for the full
+ABI breakage post-mortem.
+
+The script supports `--check` (verify only), `--upgrade`, and
+`--help`.  [`requirements.txt`](requirements.txt) is the
+unconstrained version of the same dep list, kept for reference and
+for environments that don't need the numpy cap (e.g. an Isaac Sim
+conda env that ships its own torch / numpy).
 
 ROS 2 side dependencies (apt) — beyond the base `ros-jazzy-desktop`:
 
