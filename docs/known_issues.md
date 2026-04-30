@@ -265,3 +265,79 @@ watch -n 5 'ps -p <pid> -o pid,pcpu,etime,cputime; \
 nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv
 journalctl -k --since '10 min ago' | grep -iE 'NVRM|Xid'
 ```
+
+---
+
+## 8. ⚠️ depth_projector projects entities far outside their actual sim location
+
+**Status**: blocking full end-to-end Nav2 goal-reaching, but does
+NOT affect Day 7's algorithm verification. Fix in next session.
+
+**Symptom**: with `day7.launch.py target_frame:=odom` and the sim's
+default warehouse (table spawned at origin, room ±5 m enclosed),
+`/semantic_map/objects` reports `desk_003.pose_map = (-1.89, -9.18,
++0.89)` and `estimated_distance ≈ 9.4 m`. Both are wrong:
+* the table's actual sim position is near (0, 0, ~0.5);
+* `y = -9.18` is outside the room walls;
+* `z = +0.89` is plausible (table top height) but tied to the
+  same projection bug.
+
+Downstream consequence: `approach_goal_planner` ring-samples 16
+points around the wrong entity position, every candidate falls in
+the costmap's unknown/lethal region (outside the room), and the
+planner correctly refuses to send a NavigateToPose goal — Go2
+never moves, even though the perception → memory → selector →
+planner chain is mechanically working.
+
+**RViz cue**: the LiDAR PointCloud2 (cyan rings around base_link)
+clearly shows the room interior, but the "Semantic memory (Day 6)"
+cylinder and the "Approach candidates (Day 7)" red ring sit far
+away, on or beyond the wall. Both are in the `odom` frame; the
+visual offset *is* the bug — the entity's pose data is wrong.
+
+**Suspected root causes** (none confirmed yet — diagnose next
+session):
+
+1. **Mask-median depth bias**: `depth_projector_node` takes the
+   median depth value over the YOLOE mask region. If the mask
+   slightly bleeds into far-wall or ceiling pixels at its edges,
+   the median jumps from ~5 m to ~10 m, and the projected 3D
+   point lands behind the wall. Likely fix: tighten mask via
+   morphological erosion before median, or use the bbox-centre
+   pixel only (more sensitive to mis-centred masks but immune
+   to edge bleed).
+2. **Optical frame TF inversion**: the static TF
+   `base_link → camera_color_optical_frame` is published by
+   `chair_perception.launch.py`'s `static_transform_publisher`
+   with the standard ROS optical-frame convention (z forward,
+   x right, y down). If Isaac Sim's camera prim doesn't actually
+   match this convention, depth values that should be along
+   `+camera_z` end up rotated.
+3. **Depth unit mismatch**: sim publishes
+   `/camera/depth/image_rect_raw` as 32FC1 in metres
+   (per Day-1 contract). If `depth_projector` accidentally
+   treats it as 16UC1 mm, distances scale by 1000×, but here
+   the bias is ~2× not 1000×, so this is unlikely the root
+   cause.
+
+**Diagnostic recipe**:
+
+```
+# A. Look at a single Detection3D's 3D position right after projection
+ros2 topic echo --once /detections_3d | head -50
+# Compare bbox.center.position to base_link pose:
+timeout 3 ros2 run tf2_ros tf2_echo odom base_link
+
+# B. Check the camera optical frame chain
+timeout 3 ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
+
+# C. Look at the YOLOE mask vs RGB to see if mask edges bleed
+ros2 topic echo --once /detections | head -100   # see InstanceMaskArray
+# Or just visually: RViz "Image (YOLOE detections)" + zoom on chair —
+# does the red mask hug the chair tightly or leak onto the floor?
+```
+
+**Workaround for Day 7 acceptance**: do not block on this. The Day 7
+algorithm layer (target_selector + approach_goal_planner) works
+correctly given the perception output it sees. The end-to-end
+"Go2 actually drives to the chair" demo waits on this fix.

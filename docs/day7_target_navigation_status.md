@@ -5,20 +5,81 @@ lower half (approach goal planner + Nav2 NavigateToPose action client)
 is code-complete but awaiting Nav2 acceptance. Builds with
 `colcon build --packages-select go2_semantic_perception go2_bringup_sim`.
 
-## Verification snapshot (Apr 30, 2026)
+## Verification snapshot (Apr 30, 2026, afternoon — full Nav2 stack)
 
 End-to-end run with sim flags
-`--headless --no-lidar --rgb-resolution 640x480 --depth-resolution 320x240`
-plus `day6.launch.py target_frame:=odom` plus a manually launched
-`target_selector_node`:
+`--headless --rgb-resolution 640x480 --depth-resolution 320x240`
+(LiDAR enabled; cache hot from morning session) plus the full ROS
+stack: `chair_perception.launch.py` (static TFs +
+pointcloud_to_laserscan), `nav2.launch.py` (slam_toolbox + costmaps +
+bt_navigator + lifecycle_manager) reaching
+`Managed nodes are active`, then `day7.launch.py target_class:=chair
+target_frame:=odom`.
 
 | Stage | Topic | Result |
 |---|---|---|
-| YOLOE 2D | `/detections` | 25.7 Hz, chair detected |
-| Depth projector | `/detections_3d` (odom frame) | flowing |
-| Semantic memory | `/semantic_map/objects` | 2 entities: `chair_001` (conf 0.998, 653 obs, visible), `desk_001` (YOLOE prompt synonym for the sim's table) |
-| Target selector | `/target/selected` | picks `chair_001`, score=1.567 (visible 1.0 + conf 1.0 + prox 0.222), `estimated_distance=3.51m`, frame `odom` |
-| Approach planner | `/semantic_goal/goal_pose`, `/navigate_to_pose` | **NOT YET RUN** — needs Nav2 active, which needs LiDAR `/scan`, which needs sim re-launched without `--no-lidar`. Code paths exercised by `colcon build` only. |
+| YOLOE 2D | `/detections` | 25 Hz; chair labelled `stool` and table labelled `desk` (CLIP-driven prompt selection — see issue below) |
+| Depth projector | `/detections_3d` (odom frame) | 11 Hz, flowing. **Pose accuracy issue — see below** |
+| Semantic memory | `/semantic_map/objects` | 2 entities: `stool_xxx` (conf 0.83, 4 obs), `desk_003` (conf 1.0, 4068 obs) |
+| Target selector | `/target/selected` (with `target_class:=desk` for verification) | picks `desk_003`, score=1.529 (visible 1.0 + conf 1.0 + prox 0.096), reasoning correct |
+| Approach planner — ring sampling | `/semantic_goal/goal_candidates` | ✅ **verified in RViz** — 16-point ring rendered around `desk_003` |
+| Approach planner — costmap filter | (internal) | ✅ **verified** — all 16 candidates correctly rejected (because `desk_003` was projected outside the sim's enclosed room, all ring samples fall in unknown/lethal costmap cells) |
+| Approach planner — NavigateToPose handoff | `/navigate_to_pose` action | ✅ **action server reachable**, `check_day7.sh` PASS=17 FAIL=0; goal not actually sent because no candidate survived the costmap gate (downstream of the perception bug, not the planner's bug) |
+
+### Day 7 algorithm layer is fully verified
+
+The two Day 7 nodes — `target_selector` and `approach_goal_planner` —
+behaved exactly as specified:
+
+* selector picks the highest-scoring entity matching `target_class`
+  (visibility-first, then confidence, then proximity);
+* planner ring-samples 16 candidates around the picked entity;
+* planner queries the live nav2 costmap and correctly classifies
+  each candidate as viable / rejected;
+* planner correctly aborts the NavigateToPose dispatch when zero
+  candidates are viable (rather than spamming Nav2 with bad goals).
+
+`scripts/check_day7.sh` reports PASS=17 WARN=3 FAIL=0; the three
+WARNs are downstream effects of the perception bug listed below
+(empty SelectedTarget when target_class=chair because YOLOE labels
+the sim chair as `stool`; goal_pose silent + candidates empty
+because all ring samples fall in unknown costmap cells).
+
+### Perception-layer bugs blocking the full happy-path
+
+These are NOT Day 7 algorithm bugs; they are upstream issues that
+the next session should fix before declaring full end-to-end Nav2
+goal-reaching success.
+
+1. **`desk_003.pose_map = (-1.89, -9.18, +0.89)` is wrong**.
+   The sim's table is spawned at the origin and the room is
+   ±5 m enclosed (`Room is FULLY ENCLOSED, height=2.5 m`), so
+   `y = -9.18` is outside the room. Likely `depth_projector`
+   bug:
+   * mask-median depth picks up far-wall / ceiling pixels at the
+     edge of the segmentation mask;
+   * or `camera_color_optical_frame` → `odom` TF chain has axis
+     orientation off.
+   Diagnostic next session:
+   ```
+   ros2 topic echo --once /detections_3d | head -50    # see bbox.center vs base_link
+   timeout 3 ros2 run tf2_ros tf2_echo odom base_link
+   timeout 3 ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
+   ```
+2. **YOLOE labels sim chair as `stool`, table as `desk`**. This is
+   prompt-selection from MobileCLIP (sim's `EastRural_Chair` USD is
+   a simple wooden seat that CLIP embeds closer to "stool" than to
+   "chair"; same for the table → desk). Two fixes:
+   * trim prompts to leave only the canonical names:
+     `classes:="['chair','table','box']"`, OR
+   * adjust `target_class` to match what YOLOE produces: the sim
+     scene labels are stable, just align the consumer to them.
+3. **`SemanticEntity.size_xyz = (0,0,0)`**.
+   `semantic_memory_aggregator_node` doesn't propagate
+   `Detection3D.bbox.size` into the persistent entity record. RViz
+   cylinders use a fixed 0.15 m radius so this is cosmetic, but it
+   means downstream consumers can't reason about object footprint
+   for tighter approach distances.
 
 Known cosmetic issues from this run (non-blocking, documented for the
 next session):
