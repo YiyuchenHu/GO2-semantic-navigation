@@ -1,0 +1,175 @@
+<?xml version="1.0"?>
+<!--
+  go2_minimal.urdf — visual-only stand-in for Unitree Go2 in RViz.
+
+  Purpose
+    Give RViz a "RobotModel" display so the operator can SEE Go2's
+    pose and orientation instead of just a TF coordinate triad. This
+    is the equivalent of TurtleBot3's `waffle_pi.urdf.xacro` in the
+    nav2 demo — a simple visual that anchors at base_link.
+
+  Why minimal
+    Unitree's official `go2_description` package is heavyweight
+    (full mesh hierarchy with hip/thigh/calf joints + Gazebo plugins)
+    and does NOT play well with our kinematic-locomotion sim where
+    legs do not animate. We only need a visual silhouette that's
+    instantly recognisable as "a quadruped robot facing X+".
+
+  Frame conventions
+    - base_link is the IMU/body geometric centre, ~0.32 m above
+      ground when Go2 is standing (matches Isaac Sim spawn pose
+      world (-4, -4, 0.55) and our 0.0/0.0/0.0 base_link → world).
+    - +X is forward (toward the head/camera).
+    - +Y is left.
+    - +Z is up.
+    All visual offsets below are expressed in base_link, with -Z
+    offsets used so feet contact ~ground level.
+
+  Frames NOT defined here
+    camera_link, camera_color_optical_frame, camera_depth_optical_frame,
+    imu_link, lidar_link
+        — those are still published by the static_transform_publisher
+        nodes in tf_and_scan.launch.py. We INTENTIONALLY do NOT add
+        them here so robot_state_publisher and the static publishers
+        don't fight to publish the same TF (would cause "TF_REPEATED_
+        DATA" warnings in RViz).
+
+  How RViz uses it
+    1. tf_and_scan.launch.py spawns robot_state_publisher with this
+       file as the `robot_description` parameter.
+    2. robot_state_publisher publishes the URDF onto /robot_description
+       with TRANSIENT_LOCAL durability (any later subscriber gets it).
+    3. RViz's "RobotModel" display subscribes to /robot_description
+       and renders every <visual> in every <link>. Because we only
+       have base_link, RViz draws this silhouette at base_link's
+       current TF pose.
+    4. Pose updates come from slam_toolbox's map → odom and the sim's
+       odom → base_link, NOT from robot_state_publisher (since we
+       have no joints).
+
+  To switch to the full Unitree mesh model later, replace `<box>`
+  geometries with `<mesh filename="package://go2_description/.../body.stl"/>`
+  and add a runtime dependency on `go2_description`.
+-->
+<robot name="go2">
+
+  <!--
+    Materials. Each <material> can be referenced by name from any
+    <visual> below — RViz resolves the name lookup the first time
+    it sees the material.
+  -->
+  <material name="go2_body_dark">
+    <color rgba="0.10 0.10 0.10 1.0"/>
+  </material>
+  <material name="go2_accent_grey">
+    <color rgba="0.35 0.35 0.38 1.0"/>
+  </material>
+  <material name="go2_camera_white">
+    <color rgba="0.95 0.95 0.95 1.0"/>
+  </material>
+  <material name="go2_status_green">
+    <color rgba="0.20 0.80 0.30 1.0"/>
+  </material>
+
+  <!--
+    Single rigid link with multiple visuals. Trick: URDF allows any
+    number of <visual> tags inside one <link>. We layer them to
+    sketch a recognisable quadruped without introducing extra
+    joints (which would make robot_state_publisher demand
+    /joint_states and complicate launch).
+  -->
+  <link name="base_link">
+
+    <!-- Main body box, centred at base_link, sized to Go2 EDU spec
+         (~0.65 m × 0.30 m × 0.10 m). -->
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.65 0.30 0.12"/>
+      </geometry>
+      <material name="go2_body_dark"/>
+    </visual>
+
+    <!-- Front "head" stub: a slimmer box ~0.10 m forward to give the
+         silhouette a clear facing direction. -->
+    <visual>
+      <origin xyz="0.32 0.0 0.02" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.22 0.08"/>
+      </geometry>
+      <material name="go2_accent_grey"/>
+    </visual>
+
+    <!-- Camera lens stand-in (white circle on the head). The actual
+         camera_link frame is published separately at (0.30, 0, 0.12). -->
+    <visual>
+      <origin xyz="0.36 0.0 0.04" rpy="0 1.5708 0"/>
+      <geometry>
+        <cylinder radius="0.025" length="0.02"/>
+      </geometry>
+      <material name="go2_camera_white"/>
+    </visual>
+
+    <!-- Status LED on the back, helps tell head from tail in RViz. -->
+    <visual>
+      <origin xyz="-0.30 0.0 0.05" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.08 0.02"/>
+      </geometry>
+      <material name="go2_status_green"/>
+    </visual>
+
+    <!-- LiDAR puck approximation (cylinder at lidar_link's offset
+         (0.10, 0, 0.20). Visual only — does not redefine the frame. -->
+    <visual>
+      <origin xyz="0.10 0.0 0.10" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.04"/>
+      </geometry>
+      <material name="go2_accent_grey"/>
+    </visual>
+
+    <!--
+      Four legs as static cylinders. Real Go2 has 12 DOF (3 per leg)
+      but we don't animate them. Drawing static columns from body to
+      ground is enough to communicate "quadruped". Leg attachment
+      points (xy in base_link): ±0.22 m fwd/back, ±0.12 m left/right.
+      Each leg is a 0.40 m cylinder; placing centre at z = -0.16 m
+      puts the foot at z ≈ -0.36 m (close to ground when base_link
+      is 0.32 m above ground per the sim spawn).
+    -->
+    <visual>
+      <origin xyz="0.22  0.12 -0.16" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.32"/></geometry>
+      <material name="go2_body_dark"/>
+    </visual>
+    <visual>
+      <origin xyz="0.22 -0.12 -0.16" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.32"/></geometry>
+      <material name="go2_body_dark"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.22  0.12 -0.16" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.32"/></geometry>
+      <material name="go2_body_dark"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.22 -0.12 -0.16" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.025" length="0.32"/></geometry>
+      <material name="go2_body_dark"/>
+    </visual>
+
+    <!--
+      Inertial — required by some downstream tools (e.g.
+      moveit_setup_assistant), unused in our nav2 + RViz path but
+      cheap to include. Mass 12 kg matches Go2 EDU body weight.
+    -->
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <mass value="12.0"/>
+      <inertia ixx="0.05" ixy="0.0" ixz="0.0"
+               iyy="0.10" iyz="0.0" izz="0.12"/>
+    </inertial>
+  </link>
+
+</robot>

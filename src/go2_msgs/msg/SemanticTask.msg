@@ -1,0 +1,10 @@
+std_msgs/Header header
+string task_id
+string raw_command
+string intent
+string target_class
+string target_label
+string[] target_aliases
+string frame_id
+bool requires_search
+float32 timeout_sec

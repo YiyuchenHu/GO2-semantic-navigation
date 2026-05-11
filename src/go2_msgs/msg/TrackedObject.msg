@@ -1,0 +1,13 @@
+std_msgs/Header header
+string track_id
+string class_label
+float32 confidence
+geometry_msgs/Point centroid_map
+geometry_msgs/Vector3 size_xyz
+geometry_msgs/Vector3 velocity_xyz
+float32 uncertainty
+int32 observations_count
+builtin_interfaces/Time first_seen
+builtin_interfaces/Time last_seen
+bool currently_visible
+bool is_dynamic

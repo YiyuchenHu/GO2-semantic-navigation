@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2_semantic_perception</name>
+  <version>0.1.0</version>
+  <description>Day 6+ semantic perception + Day 7 target navigation:
+    depth reprojection of vision_msgs/Detection2DArray to
+    map-frame Detection3DArray, semantic-memory aggregator that
+    merges per-frame 3D detections into persistent SemanticEntities
+    with NMS and confidence decay, target selector that picks the
+    best entity per task class, and approach-goal planner that
+    ring-samples around the target, filters by Nav2 costmap, and
+    sends a NavigateToPose action goal. Replaces (does not depend
+    on) the legacy Phase 1-3A chair-only stack in go2_perception +
+    go2_semantic_memory + go2_navigation.
+  </description>
+  <maintainer email="go2@example.com">go2_team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>vision_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+  <!-- go2_msgs gives us SemanticEntity / SemanticEntityArray (Day 6
+       persistent objects) and SelectedTarget (Day 7 chosen target).
+       Both class-agnostic — Day 7 reuses SelectedTarget without the
+       legacy Phase 3A chair-only baggage. -->
+  <depend>go2_msgs</depend>
+  <depend>message_filters</depend>
+  <depend>nav_msgs</depend>
+  <!-- Day 7 approach-goal planner sends NavigateToPose actions. -->
+  <depend>nav2_msgs</depend>
+  <depend>action_msgs</depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

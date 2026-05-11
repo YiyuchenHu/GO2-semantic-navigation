@@ -1,0 +1,3 @@
+# Output directory for SLAM-saved 2D occupancy grids.
+# Files written here by `scripts/save_map.sh` are gitignored
+# (see ../.gitignore) — recreate them by re-running mapping.

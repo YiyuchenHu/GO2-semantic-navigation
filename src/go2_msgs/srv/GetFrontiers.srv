@@ -1,0 +1,23 @@
+# Day 8 — query the frontier_explorer for unexplored regions worth going to.
+#
+# The caller (task_coordinator) supplies its current map-frame robot pose so
+# the explorer can score frontier candidates by Euclidean distance without
+# having to do its own TF lookup. The robot pose's frame_id is expected to
+# match the map frame the explorer is using internally — typically "map".
+#
+# On success, frontier_goals[i] is a sample-able PoseStamped (orientation
+# is set to identity; the controller is free to pick its own approach yaw).
+# scores[i] / info_gains[i] / distances[i] mirror frontier_goals[i] in the
+# same order, sorted by score descending. An empty frontier_goals list is
+# the legitimate "environment fully explored" signal — success stays True.
+#
+# On failure (no /map yet, malformed map, etc.) success is False and
+# message carries a short diagnostic; the other arrays are empty.
+geometry_msgs/PoseStamped robot_pose
+---
+bool success
+string message
+geometry_msgs/PoseStamped[] frontier_goals
+float32[] scores
+int32[] info_gains
+float32[] distances
