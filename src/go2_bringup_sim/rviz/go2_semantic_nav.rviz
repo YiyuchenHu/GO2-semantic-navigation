@@ -1,525 +1,594 @@
 Panels:
   - Class: rviz_common/Displays
-    Help Height: 70
+    Help Height: 138
     Name: Displays
     Property Tree Widget:
       Expanded:
         - /Global Options1
         - /TF1/Frames1
-        - /LaserScan1
-        - /PointCloud2 (LiDAR)1
       Splitter Ratio: 0.5
-    Tree Height: 540
+    Tree Height: 1704
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
+    Expanded: ~
     Name: Tool Properties
+    Splitter Ratio: 0.5
   - Class: rviz_common/Views
     Expanded:
       - /Current View1
     Name: Views
-
+    Splitter Ratio: 0.5
 Visualization Manager:
   Class: ""
   Displays:
-
-    # ---- Reference grid (10 m, 1 m squares) ---------------------------------
-    - Class: rviz_default_plugins/Grid
-      Name: Grid
-      Enabled: true
-      Reference Frame: odom
-      Plane: XY
-      Plane Cell Count: 10
-      Cell Size: 1.0
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
       Color: 160; 160; 164
-      Alpha: 0.5
+      Enabled: true
       Line Style:
-        Line Width: 0.03
+        Line Width: 0.029999999329447746
         Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
       Offset:
         X: 0
         Y: 0
         Z: 0
-
-    # ---- Day 3 SLAM / Day 4 Nav2 static map --------------------------------
-    # In Day 3 mode (mapping.launch.py running) /map is published by
-    # slam_toolbox at ~1 Hz with TRANSIENT_LOCAL durability.
-    # In Day 4 mode (nav2.launch.py running) /map is published by
-    # nav2_bringup's map_server, also TRANSIENT_LOCAL — same display works.
-    #
-    # Critical: do NOT set Update Topic here. Day 4 map_server never
-    # publishes /map_updates, but if RViz has it configured the Map
-    # display routes the main /map through a Message Filter that
-    # requires both the main message AND a TF lookup at the message's
-    # original stamp. Because /map is TRANSIENT_LOCAL, RViz subscribes
-    # AFTER map_server activation and receives the latched message
-    # with its OLD stamp (the moment map_server activated). At that
-    # stamp the AMCL TF buffer for `map` frame is empty, so the
-    # message filter drops the message and Map (static) shows
-    # "No map received" forever. Removing Update Topic disables the
-    # filter and the map renders the moment it arrives. Day 3
-    # slam_toolbox does publish /map_updates but losing them is
-    # cosmetic — the new full /map at 1 Hz overwrites the prior frame.
-    - Class: rviz_default_plugins/Map
-      Name: Map (static)
-      Enabled: true
-      Topic:
-        Value: /map
-        Depth: 1
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Durability Policy: Transient Local
-      Alpha: 0.7
+      Plane: XY
+      Plane Cell Count: 30
+      Reference Frame: odom
+      Value: true
+    - Alpha: 0.699999988079071
+      Binary representation: false
+      Binary threshold: 100
+      Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: true
-      Use Timestamp: false
-      Value: true
-
-    # ---- Day 4 Nav2: global costmap (planner_server's view) ---------------
-    # Tinted blue/purple overlay over the static map. Bright purple "halo"
-    # around walls = inflation_layer (cost_scaling_factor + inflation_radius).
-    # If costmap doesn't visually align with the static map, your
-    # `map → odom` from AMCL hasn't converged — re-init via 2D Pose Estimate.
-    - Class: rviz_default_plugins/Map
-      Name: Costmap (global)
       Enabled: true
+      Name: Map (static)
       Topic:
-        Value: /global_costmap/costmap
         Depth: 1
-        History Policy: Keep Last
-        Reliability Policy: Reliable
         Durability Policy: Transient Local
-      Alpha: 0.5
-      Color Scheme: costmap
-      Draw Behind: false
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map_updates
       Use Timestamp: false
       Value: true
-
-    # ---- Day 4 Nav2: local costmap (4×4 m rolling window) -----------------
-    - Class: rviz_default_plugins/Map
-      Name: Costmap (local)
+    - Alpha: 0.5
+      Binary representation: false
+      Binary threshold: 100
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Behind: false
       Enabled: true
+      Name: Costmap (global)
       Topic:
-        Value: /local_costmap/costmap
         Depth: 1
+        Durability Policy: Transient Local
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
+        Value: /global_costmap/costmap
+      Update Topic:
+        Depth: 5
         Durability Policy: Volatile
-      Alpha: 0.5
-      Color Scheme: costmap
-      Draw Behind: false
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /global_costmap/costmap_updates
       Use Timestamp: false
       Value: true
-
-    # ---- Day 4 Nav2: global plan (planner_server output) ------------------
-    - Class: rviz_default_plugins/Path
+    - Alpha: 0.5
+      Binary representation: false
+      Binary threshold: 100
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Behind: false
+      Enabled: false
+      Name: Costmap (local)
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /local_costmap/costmap
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /local_costmap/costmap_updates
+      Use Timestamp: false
+      Value: false
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 25; 255; 100
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.03999999910593033
       Name: Plan (global)
-      Enabled: true
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
       Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /plan
-        Depth: 5
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Durability Policy: Volatile
-      Color: 25; 255; 100      # bright green
-      Alpha: 1.0
+      Value: true
+    - Alpha: 1
       Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 255; 25; 100
+      Enabled: false
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
       Line Style: Lines
-      Line Width: 0.04
-      Pose Style: None
-
-    # ---- Day 4 Nav2: local plan (controller_server output, what Go2 follows)
-    - Class: rviz_default_plugins/Path
+      Line Width: 0.05000000074505806
       Name: Plan (local)
-      Enabled: true
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
       Topic:
-        Value: /local_plan
         Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Durability Policy: Volatile
-      Color: 255; 25; 100      # bright red
-      Alpha: 1.0
-      Buffer Length: 1
-      Line Style: Lines
-      Line Width: 0.05
-      Pose Style: None
-
-    # ---- Day 4 Nav2: AMCL particle cloud ----------------------------------
-    # Tight cluster (< 0.3 m spread) = AMCL is converged. A diffuse cloud
-    # means localization isn't locked yet — drive in a circle to disambiguate.
-    - Class: rviz_default_plugins/PoseArray
-      Name: AMCL particles
+        Value: /local_plan
+      Value: false
+    - Alpha: 1
+      Arrow Length: 0.15000000596046448
+      Axes Length: 0.30000001192092896
+      Axes Radius: 0.009999999776482582
+      Class: rviz_default_plugins/PoseArray
+      Color: 0; 200; 255
       Enabled: true
+      Head Length: 0.07000000029802322
+      Head Radius: 0.029999999329447746
+      Name: AMCL particles
+      Shaft Length: 0.23000000417232513
+      Shaft Radius: 0.009999999776482582
+      Shape: Arrow (Flat)
       Topic:
-        Value: /particle_cloud
         Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Durability Policy: Volatile
-      Arrow Length: 0.15
-      Color: 0; 200; 255       # cyan
-      Shape: Arrow (Flat)
-      Alpha: 1.0
-
-    # ---- Day 4 Nav2: robot footprint (the polygon Nav2 plans around) ------
-    - Class: rviz_default_plugins/Polygon
-      Name: Footprint (local)
+        Value: /particle_cloud
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/Polygon
+      Color: 25; 255; 0
       Enabled: true
+      Name: Footprint (local)
       Topic:
-        Value: /local_costmap/published_footprint
         Depth: 1
+        Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Durability Policy: Volatile
-      Color: 25; 255; 0
-      Alpha: 1.0
-
-    # ---- TF tree (odom / base_link / camera / imu / lidar / optical) -------
-    # Marker Scale 0.8 so the optical / imu / lidar frames don't stack on
-    # top of each other into an unreadable cluster at the body origin.
-    - Class: rviz_default_plugins/TF
-      Name: TF
+        Value: /local_costmap/published_footprint
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
       Enabled: true
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
       Update Interval: 0
-      Show Arrows: true
-      Show Axes: true
-      Show Names: true
-      Marker Scale: 0.8
+      Value: true
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
       Filter (blacklist): ""
       Filter (whitelist): ""
       Frame Timeout: 15
+      Frames:
+        All Enabled: true
+        base_link:
+          Value: true
+        camera_color_optical_frame:
+          Value: true
+        camera_depth_optical_frame:
+          Value: true
+        camera_link:
+          Value: true
+        imu_link:
+          Value: true
+        lidar_link:
+          Value: true
+        map:
+          Value: true
+        odom:
+          Value: true
+      Marker Scale: 0.800000011920929
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
       Tree:
+        map:
+          {}
         odom:
           base_link:
-            camera_link:
-              {}
             camera_color_optical_frame:
               {}
             camera_depth_optical_frame:
+              {}
+            camera_link:
               {}
             imu_link:
               {}
             lidar_link:
               {}
-
-    # ---- 2D /scan (the input slam_toolbox will eat) -------------------------
-    # IMPORTANT: pointcloud_to_laserscan publishes BEST_EFFORT (sensor_data
-    # convention), but RViz subscribers default to RELIABLE — that's
-    # INCOMPATIBLE and silently drops every scan. Override to Best Effort
-    # here. Best-Effort subscribers also accept Reliable publishers, so
-    # this works regardless of which side the publisher chooses.
-    #
-    # Color Transformer = FlatColor (bright red) instead of Intensity,
-    # because Isaac's RTX LiDAR ScanBuffer doesn't populate the intensity
-    # field by default → an Intensity-coloured scan renders invisible.
-    - Class: rviz_default_plugins/LaserScan
-      Name: LaserScan
-      Enabled: true
-      Topic:
-        Value: /scan
-        Depth: 5
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Durability Policy: Volatile
-      Style: Points
-      Size (Pixels): 6
-      Size (m): 0.06
-      Alpha: 1.0
-      Color Transformer: FlatColor
-      Color: 255; 60; 60
-      Decay Time: 0
-      Position Transformer: XYZ
-      Selectable: true
-      Queue Size: 10
-
-    # ---- 3D /lidar/points (full Ouster OS1-32 cloud) ------------------------
-    # Same Best-Effort override so we accept both Reliable (Isaac's RTX
-    # LiDAR writer publishes Reliable) and any future Best-Effort
-    # republishers without further config.
-    - Class: rviz_default_plugins/PointCloud2
-      Name: PointCloud2 (LiDAR)
-      Enabled: true
-      Topic:
-        Value: /lidar/points
-        Depth: 5
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Durability Policy: Volatile
-      Style: Points
-      Size (Pixels): 3
-      Size (m): 0.04
-      Alpha: 0.8
-      Color Transformer: AxisColor
+      Update Interval: 0
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
       Axis: Z
-      Autocompute Value Bounds: true
-      Min Value: -1
-      Max Value: 2
+      Channel Name: intensity
+      Class: rviz_default_plugins/LaserScan
+      Color: 255; 60; 60
+      Color Transformer: FlatColor
       Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: LaserScan
       Position Transformer: XYZ
       Selectable: true
-      Queue Size: 10
+      Size (Pixels): 6
+      Size (m): 0.05999999865889549
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /scan
+      Use Fixed Frame: true
       Use rainbow: true
+      Value: true
+    - Alpha: 0.800000011920929
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 2.0641281604766846
+        Min Value: -0.6728289127349854
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: AxisColor
+      Decay Time: 0
+      Enabled: true
       Invert Rainbow: false
-
-    # ---- Front camera RGB — flat 2D image panel ----------------------------
-    # The Image display creates a dockable 2D panel that renders
-    # /camera/color/image_raw straight from the bridge. No TF lookup, no
-    # render-product games — useful for "is the camera actually seeing the
-    # warehouse" sanity checks.
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: PointCloud2 (LiDAR)
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.03999999910593033
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /lidar/points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
     - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
       Name: Image (RGB)
-      Enabled: true
+      Normalize Range: true
       Topic:
-        Value: /camera/color/image_raw
         Depth: 5
+        Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Durability Policy: Volatile
-      Median window: 5
-      Min Value: 0
-      Max Value: 1
-      Normalize Range: true
-      Queue Size: 2
-
-    # ---- Day 6: semantic memory markers ------------------------------------
-    # /semantic_map/markers is a MarkerArray published by
-    # semantic_memory_aggregator_node. Each persistent SemanticEntity
-    # contributes:
-    #   * one CYLINDER (axis=Z, height 0.4 m, radius 0.15 m, colour
-    #     hashed from the class string, alpha=confidence)
-    #   * one TEXT_VIEW_FACING above it ("<class> <conf:.2f> (n=<obs>)")
-    # The first marker every tick is a DELETEALL so dropped entities
-    # disappear cleanly.
-    #
-    # Day 7+ target selection adds /semantic_map/selected_marker on
-    # top of this; for Day 6 acceptance the cylinder + label combo
-    # is enough.
+        Value: /camera/color/image_raw
+      Value: false
     - Class: rviz_default_plugins/MarkerArray
-      Name: Semantic memory (Day 6)
-      Enabled: true
+      Enabled: false
+      Name: Semantic memory (legacy, all confirmed)
+      Namespaces:
+        {}
       Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /semantic_map/markers
-        Depth: 1
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Durability Policy: Volatile
-      Namespaces: {}
-
-    # ---- Day 7: target navigation goal pose --------------------------------
-    # /semantic_goal/goal_pose is the single PoseStamped that the
-    # approach_goal_planner just sent via NavigateToPose. It mirrors the
-    # action goal so RViz shows "where the Go2 will stop" without
-    # subscribing to the action server. Yellow arrow lying flat on the
-    # ground (z=0); arrow shaft length encodes desired heading at the
-    # goal — usually pointing back at the target object.
-    - Class: rviz_default_plugins/Pose
-      Name: Approach goal (Day 7)
-      Enabled: true
-      Topic:
-        Value: /semantic_goal/goal_pose
-        Depth: 1
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Durability Policy: Volatile
-      Color: 255; 200; 0
-      Alpha: 1
-      Shaft Length: 0.5
-      Shaft Radius: 0.05
-      Head Length: 0.2
-      Head Radius: 0.1
-      Shape: Arrow
-
-    # ---- Day 7: ring-sample candidates -------------------------------------
-    # /semantic_goal/goal_candidates is a MarkerArray rendered every
-    # replan tick:
-    #   * yellow sphere   = target centre (Day 6 entity)
-    #   * green cylinder  = ring-sample pose that PASSED the costmap
-    #                       gate (cost <= cost_threshold). Visible
-    #                       greens with no goal arrow means the
-    #                       planner picked one of them — usually the
-    #                       closest-to-base_link with best heading
-    #                       alignment.
-    #   * red cylinder    = ring-sample pose REJECTED by the costmap
-    #                       (lethal cell, inflation halo, unknown,
-    #                       or off-map).
-    # If you see all-red rings, lower cost_threshold or shrink
-    # approach_distance_default.
+      Value: false
     - Class: rviz_default_plugins/MarkerArray
-      Name: Approach candidates (Day 7)
       Enabled: true
+      Name: Semantic memory visible (confirmed, in view)
+      Namespaces:
+        {}
       Topic:
-        Value: /semantic_goal/goal_candidates
         Depth: 1
+        Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Durability Policy: Volatile
-      Namespaces: {}
-
-    # ---- Day 5: YOLOE detection overlay ------------------------------------
-    # /detections/image is the input RGB frame with green bboxes,
-    # class-name + score labels, and (on -seg weights) a translucent
-    # red instance mask painted on top. Day 5 acceptance is mostly
-    # eyeballing this panel.
-    #
-    # Why a SEPARATE Image display from "Image (RGB)" above:
-    #   * Operator workflow distinguishes "camera live feed" (bare
-    #     RGB) from "what the model thinks it sees" (overlay).
-    #   * Disabling YOLOE inference (publish_overlay:=false) only
-    #     blanks this panel — the bare RGB stays readable.
-    # Disabled by default so RViz doesn't error-spam at boot when
-    # YOLOE isn't running yet (e.g. when the operator launches just
-    # the sim + nav2 stack); flip the checkbox once you start the
-    # yoloe_detector_node.
-    - Class: rviz_default_plugins/Image
-      Name: Image (YOLOE detections)
-      Enabled: false
+        Value: /semantic_map/markers_visible
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Semantic memory remembered (confirmed, not in view)
+      Namespaces:
+        {}
       Topic:
-        Value: /detections/image
         Depth: 1
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
         Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /semantic_map/markers_remembered
+      Value: true
+    - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
+      Class: rviz_default_plugins/Pose
+      Color: 255; 200; 0
+      Enabled: true
+      Head Length: 0.20000000298023224
+      Head Radius: 0.10000000149011612
+      Name: Approach goal (Day 7)
+      Shaft Length: 0.5
+      Shaft Radius: 0.05000000074505806
+      Shape: Arrow
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /semantic_goal/goal_pose
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Approach candidates (Day 7)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /semantic_goal/goal_candidates
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Frontiers (Day 8)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /frontier_markers
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
       Median window: 5
       Min Value: 0
-      Max Value: 1
+      Name: Image (YOLOE detections)
       Normalize Range: true
-      Queue Size: 2
-
-    # ---- Front camera RGB — 3D-projected (off by default) ------------------
-    # The Camera display takes the same /camera/color/image_raw but projects
-    # it INTO the 3D scene using camera_info K and the camera_link TF chain.
-    # Useful for visually confirming RGB-D <-> LaserScan alignment, but
-    # disabled by default because it overlays everything else.
-    - Class: rviz_default_plugins/Camera
-      Name: Camera (RGB, 3D-projected)
-      Enabled: false
       Topic:
-        Value: /camera/color/image_raw
-        Depth: 5
+        Depth: 1
+        Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Durability Policy: Volatile
+        Value: /detections/image
+      Value: false
+    - Class: rviz_default_plugins/Camera
+      Enabled: false
+      Far Plane Distance: 100
       Image Rendering: background and overlay
+      Name: Camera (RGB, 3D-projected)
       Overlay Alpha: 0.5
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /camera/color/image_raw
+      Value: false
       Visibility:
+        AMCL particles: true
+        Approach candidates (Day 7): true
+        Approach goal (Day 7): true
+        Costmap (global): true
+        Costmap (local): true
+        Footprint (local): true
+        Frontiers (Day 8): true
         Grid: true
-        TF: true
-        LaserScan: true
-        PointCloud2 (LiDAR): true
         Image (RGB): true
+        Image (YOLOE detections): true
+        LaserScan: true
+        Map (static): true
+        Plan (global): true
+        Plan (local): true
+        PointCloud2 (LiDAR): true
+        Semantic memory (legacy, all confirmed): true
+        Semantic memory visible (confirmed, in view): true
+        Semantic memory remembered (confirmed, not in view): true
+        TF: true
         Value: true
       Zoom Factor: 1
-
   Enabled: true
-
   Global Options:
     Background Color: 48; 48; 48
-    Default Light: true
-    # Fixed Frame: map for Day 4+ (Nav2 / AMCL stack). Static map +
-    # global_costmap are in `map`. AMCL provides map → odom; sim
-    # provides odom → base_link. Switching Fixed Frame to `odom`
-    # is fine for Day 1-3 (no map yet) but hides the AMCL drift
-    # in Day 4. If you want to see Day 1-3 layout, change at
-    # runtime via Global Options panel — no need to edit config.
-    Fixed Frame: map
+    Fixed Frame: world
     Frame Rate: 30
-
   Name: root
-
   Tools:
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
     - Class: rviz_default_plugins/FocusCamera
     - Class: rviz_default_plugins/Measure
       Line color: 128; 128; 0
-    # Day 4 Nav2 tools — toolbar buttons to set goals + initial pose.
-    # SetGoal sends a PoseStamped on /goal_pose, which BT navigator
-    # ingests via NavigateToPose action. SetInitialPose publishes a
-    # PoseWithCovarianceStamped on /initialpose for AMCL to reset
-    # its particle filter (use this if AMCL diverges or boots to the
-    # wrong location).
     - Class: rviz_default_plugins/SetGoal
       Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /goal_pose
-        Depth: 5
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Durability Policy: Volatile
     - Class: rviz_default_plugins/SetInitialPose
-      Topic:
-        Value: /initialpose
-        Depth: 5
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Durability Policy: Volatile
       Covariance x: 0.25
       Covariance y: 0.25
-      Covariance yaw: 0.0685   # ≈ 15° squared
-
+      Covariance yaw: 0.06849999725818634
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /initialpose
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
-
   Value: true
-
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Name: Current View
-      # Go2 spawns at world (-4, -4, 0.55) but `odom` is anchored at the
-      # spawn pose, so in odom Fixed Frame the robot starts at (0, 0, 0).
-      # Centre the orbit there so the LaserScan ring + walls are framed.
-      Distance: 8
+      Distance: 36.26233673095703
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
       Focal Point:
-        X: 0
-        Y: 0
-        Z: 0
+        X: 12.96423625946045
+        Y: -1.8854572772979736
+        Z: -9.13068675994873
       Focal Shape Fixed Size: true
-      Focal Shape Size: 0.05
+      Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
-      Near Clip Distance: 0.01
-      Pitch: 0.55
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.8352031707763672
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.78
+      Yaw: 2.8950071334838867
     Saved:
       - Class: rviz_default_plugins/Orbit
-        Name: Top-Down (warehouse)
         Distance: 12
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.05999999865889549
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
         Focal Point:
           X: 0
           Y: 0
           Z: 0
-        Pitch: 1.5707
-        Yaw: 1.5707
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.05000000074505806
+        Invert Z Axis: false
+        Name: Top-Down (warehouse)
+        Near Clip Distance: 0.009999999776482582
+        Pitch: 1.5697963237762451
         Target Frame: odom
+        Value: Orbit (rviz_default_plugins)
+        Yaw: 1.5707000494003296
       - Class: rviz_default_plugins/ThirdPersonFollower
-        Name: Follow Go2
         Distance: 4
-        Pitch: 0.4
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.05999999865889549
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Focal Point:
+          X: 0
+          Y: 0
+          Z: 0
+        Focal Shape Fixed Size: true
+        Focal Shape Size: 0.05000000074505806
+        Invert Z Axis: false
+        Name: Follow Go2
+        Near Clip Distance: 0.009999999776482582
+        Pitch: 0.4000000059604645
         Target Frame: base_link
-        Yaw: 3.14
-
-# ---- Image panel docked on the right ---------------------------------------
-# This is a separate "Image" PANEL (not a 3D Display) — it always shows the
-# raw /camera/color/image_raw at the actual frame rate, regardless of TF.
-
+        Value: ThirdPersonFollower (rviz_default_plugins)
+        Yaw: 3.140000104904175
 Window Geometry:
+  Camera (RGB, 3D-projected):
+    collapsed: false
   Displays:
     collapsed: false
+  Height: 2116
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Image (RGB):
+    collapsed: false
+  Image (YOLOE detections):
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd00000002000000000000038f000007a4fc0200000006fb000000160049006d006100670065002000280052004700420029000000021a0000019f0000002800fffffffb0000003400430061006d00650072006100200028005200470042002c002000330044002d00700072006f006a00650063007400650064002900000001b6000004c00000002800fffffffb000000100044006900730070006c0061007900730100000070000007a40000018600fffffffb0000001200530065006c0065006300740069006f006e00000003cf0000011c000000b200fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073000000046600000153000000b200fffffffb0000000a005600690065007700730000000540000002d40000013800ffffff000000020000097d00000224fc0100000001fb000000300049006d006100670065002000280059004f004c004f004500200064006500740065006300740069006f006e0073002900000000000000097d0000019500ffffff000005e2000007a400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Tool Properties:
     collapsed: false
   Views:
     collapsed: false
-  Height: 900
-  Width: 1600
-  X: 100
-  Y: 100
-  Hide Left Dock: false
-  Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000004000000000000016a000002b0fc0200000008fb0000001200530065006c0065006300740069006f006e00000000280000010f0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000000280000017d0000005c00fffffffb000000120056006900650077007300000001ad0000012b0000009800fffffffb0000000a00440069007300700061007900730100000028000002b0000000c700ffffff0000000100000150000003a8fc0200000003fb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000000410000037800000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000007800000003efc0100000002fb0000000800540069006d006500000000000000078000000241000000fffffffffb0000000800540069006d00650100000000000004500000000000000000000004fa000002b000000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Width: 2429
+  X: 422
+  Y: 241

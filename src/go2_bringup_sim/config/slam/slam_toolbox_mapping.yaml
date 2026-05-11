@@ -16,9 +16,12 @@
 #   warnings every time render falls behind.
 #
 # Loop closure:
-#   Enabled. Even though the warehouse is small, our Go2 will revisit
-#   the same wall corners often enough that loop closure cleans up the
-#   slow odom drift the kinematic /cmd_vel integrator accumulates.
+#   DISABLED in the Isaac Sim setup (see do_loop_closing comment
+#   below). The benefit (correcting odom drift on revisits) is tiny
+#   in a 10 m room with sim-perfect kinematic odometry; the cost
+#   (5-10 second mutex stalls in publishTransformLoop during Ceres
+#   optimisation, which makes Nav2 abort every goal) is severe.
+#   Re-enable on real hardware where odom drift is real.
 #
 # References:
 #   * https://github.com/SteveMacenski/slam_toolbox
@@ -44,24 +47,93 @@ slam_toolbox:
 
     # ---- Time / publishing ----------------------------------------
     debug_logging: false
-    throttle_scans: 1               # process every scan (we're already at ~5 Hz)
-    # transform_publish_period controls both publish RATE (1/period) and
-    # the "post-date" offset added to the TF stamp so it stays valid
-    # forward in time. Default 0.05 (20 Hz, +50 ms post-date) is tight
-    # for Nav2 in our sim — when slam_toolbox briefly stalls (loop
-    # closure / GPU contention) the latest TF is at sim_time T but the
-    # controller queries at T + a few ms, which tf2 rejects with
-    # "extrapolation into the future". Bumping to 0.1 (10 Hz, +100 ms
-    # post-date) gives controller_server's per-tick TF lookup more
-    # margin without flooding the network.
-    transform_publish_period: 0.1
+    # Process 1 in 3 scans (effective ~1.1 Hz at the sim's 3.4 Hz lidar)
+    # to give slam_toolbox enough time to scan-match each frame without
+    # the processing queue building up.
+    #
+    # Why this matters
+    #   `tf2_tools view_frames` showed `map → odom` lagging the
+    #   sim_time by 17 seconds — slam was processing scans 17 seconds
+    #   in the past while the lidar kept feeding new ones at 3.4 Hz.
+    #   The lag grew steadily over a long mapping session, eventually
+    #   exceeding Nav2's transform_tolerance, so every controller
+    #   lookup failed with "Lookup would require extrapolation into
+    #   the future".
+    #
+    #   Even with do_loop_closing: false, each scan still costs
+    #   correlation_search (50×50×10 candidates) + scan-to-keyframe
+    #   matching against the local buffer. On a single-threaded
+    #   processor, ~3.4 Hz turns into a chronic backlog.
+    #
+    # Cost
+    #   Sparser keyframes (~1.1 Hz instead of 3.4 Hz). In a 10 m room
+    #   with sim-perfect odometry, this still produces a clean map —
+    #   the user's mapping run with throttle_scans: 3 should be
+    #   indistinguishable from the previous one in RViz.
+    throttle_scans: 3
+    # transform_publish_period is a SINGLE knob that controls TWO
+    # things in slam_toolbox:
+    #   1. The TF rebroadcast rate (1 / period Hz).
+    #   2. The "post-date" offset added to every published stamp:
+    #         published_stamp = last_scan_stamp + transform_publish_period
+    #
+    # Why we need this big (1.0 = post-date by 1 second)
+    #   tf2's `Buffer::transform(pose, frame, tolerance)` treats the
+    #   `tolerance` argument as a "wait up to N seconds for data to
+    #   arrive", NOT as an extrapolation tolerance. Any request whose
+    #   time is strictly newer than the latest available stamp throws
+    #   `ExtrapolationException("Lookup would require extrapolation
+    #   into the future")` regardless of how big tolerance is.
+    #
+    #   Nav2's controller_server ticks at 20 Hz (50 ms cadence) and
+    #   each tick looks up `odom → map` at "now". Between two lidar
+    #   scans (~300 ms in our Isaac Sim setup) there are 6 control
+    #   ticks. With transform_publish_period=0.1 (100 ms post-date),
+    #   only ticks 1-2 in the 300-ms inter-scan window land within
+    #   the post-dated stamp; ticks 3-6 are past it and the lookup
+    #   fails with the "future extrapolation" error. Symptom: the
+    #   controller `Aborting handle` once per second for the entire
+    #   goal duration, then BT bails out as `Goal failed`.
+    #
+    #   The post-date offset must satisfy two competing
+    #   constraints simultaneously:
+    #
+    #     post_date >  lidar_scan_period (~300 ms in our sim)
+    #         so that nav2 controller's "now" lookup always
+    #         finds latest > now (no future-extrapolation error).
+    #
+    #     post_date <  cache_time         (default 10 s)
+    #         AND
+    #     publish_rate >= controller_freq
+    #         so that nav2's tf2 buffer holds enough samples
+    #         and the controller doesn't stall waiting for the
+    #         next slam tick.
+    #
+    #   We had transform_publish_period=1.0 briefly which
+    #   satisfied the first constraint but published at 1 Hz —
+    #   nav2's controller_server was rate-limited to 1 Hz waiting
+    #   for fresh TF, and costmap's message_filter started
+    #   dropping lidar scans whose stamps were older than the
+    #   buffer's earliest entry (which had crept 1 s into the
+    #   future).
+    #
+    #   0.55 s (runtime evidence, terminals/10.txt): controller still saw
+    #   future extrapolation on odom→map with 0.4 s — latest TF ~8943.38,
+    #   requested ~8943.55 (~167 ms gap). Post-date must clear worst-case
+    #   sim-clock advance between slam ticks; stay below ~1.0 s to avoid the
+    #   message_filter scan-drop regression documented above.
+    #
+    # If you re-enable scan matching on real hardware
+    #   The map→odom transform actually MOVES per scan, so any
+    #   post-date trick has nav2 acting on a slightly-stale
+    #   correction. Drop this back to 0.05-0.1 there.
+    transform_publish_period: 0.55
     map_update_interval: 1.0        # republish /map every 1.0 s
     resolution: 0.05                # 5 cm cells — fine for 10m room
     minimum_time_interval: 0.1      # min 100 ms between scan inserts
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000     # 40 MB serialization buffer for big graphs
-    enable_interactive_mode: true
 
     # ---- Sensor model (must match OS1-32 stand-in) ----------------
     # OS1-32 datasheet max range ≈ 120 m. We cap at 12 m so the SLAM
@@ -72,7 +144,34 @@ slam_toolbox:
     minimum_laser_range: 0.30
 
     # ---- Scan matching --------------------------------------------
-    use_scan_matching: true
+    # Scan matching is DISABLED on purpose for the Isaac Sim setup.
+    #
+    # Why
+    #   With throttle_scans=3 and a tightened correlation search
+    #   (0.3 m), slam_toolbox's average lag dropped from 17 s to
+    #   < 1 s — but the moment Go2 started moving on a Nav2 goal,
+    #   per-scan match time spiked enough to stall map→odom for
+    #   another 10 s, which still aborted every controller goal.
+    #
+    #   In Isaac Sim the kinematic locomotion backend
+    #   (sim/locomotion_backends.py) integrates /cmd_vel directly
+    #   into /odom — there is NO sensor noise, NO wheel slip, and
+    #   NO clock skew. The odom-derived map→odom transform is
+    #   ground truth; a scan match against the local map cannot
+    #   improve on it, only add latency.
+    #
+    #   With use_scan_matching=false slam_toolbox simply chains
+    #   `odom → base_link` (from sim) to the static `map → odom`
+    #   it set at boot, and uses incoming scans only to update the
+    #   occupancy grid. Per-scan cost drops from ~50 ms (scan
+    #   match) to ~5 ms (raster cell update), eliminating stalls.
+    #
+    # When to flip back
+    #   On real hardware where /odom drifts (and on any sim with
+    #   noisy odometry), turn this back on. The trade-off was made
+    #   for a deterministic Isaac Sim setup; it should not be
+    #   copy-pasted to real-robot configs.
+    use_scan_matching: false
     use_scan_barycenter: true
     minimum_travel_distance: 0.30   # insert keyframe every 30 cm of travel
     minimum_travel_heading: 0.30    # insert keyframe every 17° of yaw
@@ -80,7 +179,33 @@ slam_toolbox:
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.10
     link_scan_maximum_distance: 1.50
-    do_loop_closing: true
+    # Loop closure is DISABLED on purpose for the Isaac Sim setup.
+    #
+    # Why
+    #   slam_toolbox's loop-closure path runs Ceres on the full pose
+    #   graph and holds `map_to_odom_mutex_` for the duration of the
+    #   optimisation. publishTransformLoop() takes the same mutex to
+    #   broadcast `map → odom`, so during a multi-second Ceres pass
+    #   the TF publisher is FROZEN — even in the online_async variant.
+    #   In our 10×10 m warehouse + Isaac Sim RTX LiDAR setup this
+    #   produces 5-10 second TF gaps that Nav2's controller_server
+    #   cannot ride out (transform_tolerance is 2 s). Symptom: every
+    #   /navigate_to_pose goal aborts with
+    #     RPPPathHandler: Exception in transformPose: Lookup would
+    #     require extrapolation into the future. Requested time T but
+    #     the latest data is at time T-Δ
+    #   even when Go2 is sitting still and the map is fully built.
+    #
+    # Cost of disabling
+    #   No automatic drift correction on revisits. In a 10 m room with
+    #   sim-perfect kinematic odometry (sim/locomotion_backends.py
+    #   integrates /cmd_vel directly, no slip), drift is < 5 cm over
+    #   a full 5-minute exploration loop — well below the 0.5 m
+    #   inflation_radius and 0.25 m xy_goal_tolerance. On real hardware
+    #   with real odometry drift, re-enable this and tune
+    #   loop_match_minimum_chain_size up (e.g. 30) to make stalls
+    #   rarer, or move SLAM off the navigation machine.
+    do_loop_closing: false
     loop_search_maximum_distance: 8.0
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
@@ -88,9 +213,22 @@ slam_toolbox:
     loop_match_minimum_response_fine: 0.45
 
     # ---- Correlation parameters -----------------------------------
-    correlation_search_space_dimension: 0.5
+    # Tightened from 0.5 to 0.3 m (50×50 → 30×30 grid at 0.01 m
+    # resolution = 60% fewer candidate evaluations per scan).
+    # Justified because Go2 in sim has near-perfect odometry, so
+    # the prior on next-pose uncertainty is < 5 cm per scan; a 30 cm
+    # search window is still 6× the expected uncertainty.
+    correlation_search_space_dimension: 0.3
     correlation_search_space_resolution: 0.01
-    correlation_search_space_smear_deviation: 0.10
+    # Was 0.10 — that's a 10 cm Gaussian smear that slam_toolbox bakes
+    # into the raster grid every time a scan lands. Combined with the
+    # Isaac Sim RTX LiDAR's ±2-3 cm per-ray noise and our pure-odom
+    # localisation (use_scan_matching: false), the warehouse walls
+    # ended up rendered as a ~30-40 cm fuzzy band instead of a sharp
+    # 20 cm wall + small inflation. 0.05 (5 cm) tightens the smear
+    # while still giving correlation enough wiggle room for any
+    # odom-stamp jitter; runtime walls render ~15-20 cm wide.
+    correlation_search_space_smear_deviation: 0.05
 
     # ---- Loop-closure correlation ---------------------------------
     loop_search_space_dimension: 8.0

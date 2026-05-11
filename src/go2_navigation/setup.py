@@ -24,6 +24,8 @@ setup(
             "nav_executor_node = go2_navigation.nav_executor_node:main",
             "search_manager_node = go2_navigation.search_manager_node:main",
             "arrival_verifier_node = go2_navigation.arrival_verifier_node:main",
+            "frontier_explorer_node = go2_navigation.frontier_explorer_node:main",
+            "mapping_explorer_node = go2_navigation.mapping_explorer_node:main",
         ],
     },
 )

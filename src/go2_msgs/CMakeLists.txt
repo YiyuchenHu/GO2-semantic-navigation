@@ -26,8 +26,13 @@ set(msg_files
   "msg/SelectedTarget.msg"
 )
 
+set(srv_files
+  "srv/GetFrontiers.srv"
+)
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
+  ${srv_files}
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
 )
 

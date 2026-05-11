@@ -80,6 +80,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     LogInfo,
 )
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
@@ -88,6 +89,7 @@ from launch_ros.actions import Node, SetParameter
 def generate_launch_description() -> LaunchDescription:
     pkg_share = get_package_share_directory("go2_bringup_sim")
     nav2_share = get_package_share_directory("nav2_bringup")
+    slam_toolbox_share = get_package_share_directory("slam_toolbox")
 
     project_root = os.environ.get(
         "PROJECT_ROOT",
@@ -169,20 +171,103 @@ def generate_launch_description() -> LaunchDescription:
     use_composition = LaunchConfiguration("use_composition")
     cmd_vel_relay_flag = LaunchConfiguration("cmd_vel_relay")
 
-    # ---- nav2_bringup full stack -------------------------------------------
-    # When slam:=True, nav2_bringup includes its slam_launch.py which
-    # starts slam_toolbox in mapping mode + publishes /map and map→odom,
-    # AND skips amcl/map_server. When slam:=False, nav2_bringup's
-    # localization_launch.py is used (amcl + map_server with the static
-    # .yaml/.pgm).
-    nav2_bringup_launch = IncludeLaunchDescription(
+    # ---- Nav2 stack + SLAM (slam:=True path) ------------------------------
+    # IMPORTANT: when slam:=True we DO NOT use nav2_bringup's
+    # bringup_launch.py. That file's slam_launch.py hardcodes
+    # `online_sync_launch.py` (see /opt/ros/jazzy/share/nav2_bringup/launch/
+    # slam_launch.py line 44), which spawns sync_slam_toolbox_node. The
+    # sync variant runs scan-matching + Ceres pose-graph optimisation +
+    # /tf publishing on a single thread, so any 5-10 s loop-closure or
+    # heavy optimisation cycle stops broadcasting `map → odom` for the
+    # whole duration. With Isaac Sim driving Go2, that gap is regularly
+    # >5 s, which makes Nav2's controller_server abort every goal with
+    # "Lookup would require extrapolation into the future" and the BT
+    # then aborts to the client (perimeter_patrol / task_coordinator).
+    #
+    # The fix is mode, not tuning: async_slam_toolbox_node decouples the
+    # TF publisher from the optimiser, so `map → odom` keeps streaming
+    # at `transform_publish_period` (we set 0.1 s in
+    # slam_toolbox_mapping.yaml) regardless of how long the current
+    # scan_matcher / Ceres pass takes. We bring it up via
+    # `slam_toolbox/launch/online_async_launch.py` directly, and bring
+    # up the Nav2 servers via `nav2_bringup/launch/navigation_launch.py`
+    # (the same one bringup_launch.py would have used internally — minus
+    # the sync slam_toolbox include).
+    #
+    # When slam:=False (real-robot localisation path), we keep the
+    # original bringup_launch.py because it correctly skips slam_launch
+    # in that case and goes through localization_launch.py (amcl +
+    # map_server) — no sync slam involvement, no need for special
+    # handling.
+    slam_toolbox_async = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(slam_toolbox_share, "launch",
+                         "online_async_launch.py"),
+        ),
+        launch_arguments={
+            "use_sim_time": "true",
+            "slam_params_file": slam_params_file,
+            "autostart": autostart,
+        }.items(),
+        condition=IfCondition(slam_flag),
+    )
+
+    # IMPORTANT: navigation_launch.py with use_composition=True only
+    # calls LoadComposableNodes against an EXISTING container — it does
+    # NOT create the container itself. bringup_launch.py normally
+    # creates `nav2_container` (rclcpp_components/component_container_
+    # isolated) right before including navigation_launch.py. Since we
+    # bypass bringup_launch.py to avoid its sync_slam dependency, we
+    # have to spawn the container ourselves; otherwise LoadComposable-
+    # Nodes silently no-ops because target_container='/nav2_container'
+    # never exists, and /controller_server, /bt_navigator,
+    # /navigate_to_pose etc never come up. The first iteration of this
+    # fix bit us exactly that way (perimeter_patrol failed with
+    # "/navigate_to_pose not available").
+    #
+    # parameters / remappings here mirror what bringup_launch.py would
+    # have applied (see /opt/ros/jazzy/share/nav2_bringup/launch/
+    # bringup_launch.py around line 146): the nav2 params file is
+    # loaded onto the container so all composable nodes inherit it,
+    # and /tf, /tf_static are remapped to relative names which is the
+    # nav2 convention so they work consistently across namespaces.
+    nav2_container = Node(
+        package="rclcpp_components",
+        executable="component_container_isolated",
+        name="nav2_container",
+        parameters=[params_file, {"autostart": autostart}],
+        arguments=["--ros-args", "--log-level", "info"],
+        remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
+        output="screen",
+        condition=IfCondition(slam_flag),
+    )
+    nav2_navigation_only = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(nav2_share, "launch", "navigation_launch.py"),
+        ),
+        launch_arguments={
+            "use_sim_time": "true",
+            "params_file": params_file,
+            "autostart": autostart,
+            "use_composition": use_composition,
+            "container_name": "nav2_container",
+            "namespace": "",
+        }.items(),
+        condition=IfCondition(slam_flag),
+    )
+
+    # ---- AMCL + Nav2 full stack (slam:=False path) ------------------------
+    # Real-robot path. bringup_launch.py with slam:=False uses
+    # localization_launch.py (amcl + map_server) which doesn't have the
+    # sync_slam_toolbox issue. Keep this path identical to the previous
+    # behaviour.
+    nav2_bringup_amcl = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(nav2_share, "launch", "bringup_launch.py"),
         ),
         launch_arguments={
             "use_sim_time": "true",
-            "slam": slam_flag,
-            "slam_params_file": slam_params_file,
+            "slam": "False",
             "map": map_yaml,
             "params_file": params_file,
             "autostart": autostart,
@@ -191,12 +276,12 @@ def generate_launch_description() -> LaunchDescription:
             "use_namespace": "false",
             "namespace": "",
         }.items(),
+        condition=UnlessCondition(slam_flag),
     )
 
     # ---- /cmd_vel_smoothed → /cmd_vel relay --------------------------------
     # `topic_tools/relay` accepts positional args `<input> <output>`.
     # IfCondition gates this on the `cmd_vel_relay` launch flag.
-    from launch.conditions import IfCondition
     cmd_vel_relay_node = Node(
         package="topic_tools",
         executable="relay",
@@ -225,6 +310,13 @@ def generate_launch_description() -> LaunchDescription:
         LogInfo(msg=["[nav2.launch] params=", params_file]),
         LogInfo(msg=["[nav2.launch] cmd_vel relay=", cmd_vel_relay_flag,
                      " (relays /cmd_vel_smoothed → /cmd_vel)"]),
-        nav2_bringup_launch,
+        LogInfo(msg=["[nav2.launch] SLAM mode: ", slam_flag,
+                     " (True → async_slam_toolbox_node started directly, "
+                     "bypassing nav2_bringup/slam_launch.py which would "
+                     "force the sync variant)"]),
+        slam_toolbox_async,
+        nav2_container,
+        nav2_navigation_only,
+        nav2_bringup_amcl,
         cmd_vel_relay_node,
     ])

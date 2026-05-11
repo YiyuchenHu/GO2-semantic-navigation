@@ -4,10 +4,12 @@ What this launch starts
 -----------------------
 1. yoloe_detector_node          (go2_perception, Day 5)
    Subscribes /camera/color/image_raw, publishes
-   vision_msgs/Detection2DArray on /detections.
+   vision_msgs/Detection2DArray on /detections and (default)
+   go2_msgs/InstanceMaskArray on /detections/masks for depth sampling.
 2. depth_projector_node         (go2_semantic_perception, Day 6)
    Sync /detections + /camera/depth/image_rect_raw +
-   /camera/color/camera_info, reproject each Detection2D into
+   /camera/color/camera_info (+ /detections/masks when use_masks:=true),
+   reproject each Detection2D into
    `target_frame` (default "map"), publish
    vision_msgs/Detection3DArray on /detections_3d.
 3. semantic_memory_aggregator_node (go2_semantic_perception, Day 6)
@@ -103,11 +105,21 @@ def generate_launch_description() -> LaunchDescription:
         "tf_timeout_sec", default_value="1.5",
         description="TF lookup timeout for the reprojection.",
     )
+    tf_fallback_latest_arg = DeclareLaunchArgument(
+        "tf_fallback_latest_on_time_error",
+        default_value="true",
+        description="depth_projector: on TF extrapolation, retry with latest "
+                    "transform (sim-friendly).",
+    )
 
     # -- Semantic memory aggregator ----------------------------------------
+    # Day 6.5: NMS / decay / visibility defaults absorb residual projection
+    # jitter; mask-based depth median is primary (see depth_projector_node).
+    # See docs/known_issues.md #9 + docs/day7_target_navigation_status.md.
     nms_radius_arg = DeclareLaunchArgument(
-        "nms_radius_m", default_value="0.3",
-        description="Spatial NMS radius for class-aware merging.",
+        "nms_radius_m", default_value="0.8",
+        description="Spatial NMS radius for class-aware merging. "
+                    "Day 6.5 raised from 0.3 to 0.8.",
     )
     position_alpha_arg = DeclareLaunchArgument(
         "position_alpha", default_value="0.3",
@@ -118,8 +130,9 @@ def generate_launch_description() -> LaunchDescription:
         description="Additive confidence bump per matched obs.",
     )
     confidence_decay_arg = DeclareLaunchArgument(
-        "confidence_decay_rate", default_value="0.05",
-        description="Age-aware exponential confidence decay rate.",
+        "confidence_decay_rate", default_value="0.02",
+        description="Age-aware exponential confidence decay rate. "
+                    "Day 6.5 lowered from 0.05 to 0.02.",
     )
     min_det_conf_arg = DeclareLaunchArgument(
         "min_detection_confidence", default_value="0.4",
@@ -128,12 +141,47 @@ def generate_launch_description() -> LaunchDescription:
     )
     min_valid_pixels_arg = DeclareLaunchArgument(
         "min_valid_pixels", default_value="30",
-        description="Min finite depth pixels in a bbox ROI before "
-                    "trusting the median (depth_projector).",
+        description="Min finite depth pixels in mask (or bbox fallback ROI) "
+                    "before trusting Z (depth_projector).",
     )
     visibility_timeout_arg = DeclareLaunchArgument(
-        "visibility_timeout_sec", default_value="2.0",
-        description="Mark currently_visible=False after this gap.",
+        "visibility_timeout_sec", default_value="5.0",
+        description="Mark currently_visible=False after this gap. "
+                    "Day 6.5 raised from 2.0 to 5.0 s.",
+    )
+    permanent_after_obs_arg = DeclareLaunchArgument(
+        "permanent_after_observations", default_value="5",
+        description="Promote entity to permanent landmark after this "
+                    "many observations: confidence stops decaying and "
+                    "pruning is skipped. Set 0 to disable.",
+    )
+    entity_merge_radius_arg = DeclareLaunchArgument(
+        "entity_merge_radius_m", default_value="1.5",
+        description="Same-class second-pass merge radius (housekeeping). "
+                    "Catches duplicate entities from one physical object. "
+                    "Set 0 to disable.",
+    )
+
+    # -- Day 6.5 — masks + depth_projector -------------------------------
+    use_masks_arg = DeclareLaunchArgument(
+        "use_masks", default_value="True",
+        description="depth_projector: sync InstanceMaskArray from YOLOE "
+                    "and use median depth inside mask.",
+    )
+    masks_topic_arg = DeclareLaunchArgument(
+        "masks_topic", default_value="/detections/masks",
+        description="go2_msgs/InstanceMaskArray; must match yoloe "
+                    "masks_topic.",
+    )
+    bbox_shrink_arg = DeclareLaunchArgument(
+        "bbox_shrink", default_value="0.20",
+        description="(Deprecated, mask-less fallback only.) Inset "
+                    "fraction before bbox depth ROI.",
+    )
+    depth_percentile_arg = DeclareLaunchArgument(
+        "depth_percentile", default_value="30.0",
+        description="(Deprecated, mask-less fallback only.) Percentile "
+                    "for bbox ROI depth.",
     )
 
     # ----------------------------------------------------------------------
@@ -151,6 +199,9 @@ def generate_launch_description() -> LaunchDescription:
     camera_info_topic = LaunchConfiguration("camera_info_topic")
     sync_slop = LaunchConfiguration("sync_slop")
     tf_timeout_sec = LaunchConfiguration("tf_timeout_sec")
+    tf_fallback_latest_on_time_error = LaunchConfiguration(
+        "tf_fallback_latest_on_time_error"
+    )
     nms_radius_m = LaunchConfiguration("nms_radius_m")
     position_alpha = LaunchConfiguration("position_alpha")
     confidence_step_up = LaunchConfiguration("confidence_step_up")
@@ -158,6 +209,14 @@ def generate_launch_description() -> LaunchDescription:
     min_detection_confidence = LaunchConfiguration("min_detection_confidence")
     min_valid_pixels = LaunchConfiguration("min_valid_pixels")
     visibility_timeout_sec = LaunchConfiguration("visibility_timeout_sec")
+    permanent_after_observations = LaunchConfiguration(
+        "permanent_after_observations"
+    )
+    entity_merge_radius_m = LaunchConfiguration("entity_merge_radius_m")
+    bbox_shrink = LaunchConfiguration("bbox_shrink")
+    depth_percentile = LaunchConfiguration("depth_percentile")
+    use_masks = LaunchConfiguration("use_masks")
+    masks_topic = LaunchConfiguration("masks_topic")
 
     yoloe_node = Node(
         package="go2_perception",
@@ -173,6 +232,7 @@ def generate_launch_description() -> LaunchDescription:
             "half": half,
             "publish_overlay": publish_overlay,
             "input_topic": "/camera/color/image_raw",
+            "masks_topic": masks_topic,
             "log_period_sec": 5.0,
         }],
     )
@@ -184,13 +244,20 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[{
             "detections_topic": "/detections",
+            "masks_topic": masks_topic,
+            "use_masks": use_masks,
             "depth_image_topic": depth_image_topic,
             "camera_info_topic": camera_info_topic,
             "output_topic": "/detections_3d",
             "target_frame": target_frame,
             "sync_slop": sync_slop,
             "tf_timeout_sec": tf_timeout_sec,
+            "tf_fallback_latest_on_time_error": (
+                tf_fallback_latest_on_time_error
+            ),
             "min_valid_pixels": min_valid_pixels,
+            "bbox_shrink": bbox_shrink,
+            "depth_percentile": depth_percentile,
         }],
     )
 
@@ -210,6 +277,8 @@ def generate_launch_description() -> LaunchDescription:
             "confidence_decay_rate": confidence_decay_rate,
             "min_detection_confidence": min_detection_confidence,
             "visibility_timeout_sec": visibility_timeout_sec,
+            "permanent_after_observations": permanent_after_observations,
+            "entity_merge_radius_m": entity_merge_radius_m,
         }],
     )
 
@@ -217,9 +286,14 @@ def generate_launch_description() -> LaunchDescription:
         SetParameter(name="use_sim_time", value=True),
         model_path_arg, classes_arg, conf_arg, iou_arg, device_arg, half_arg,
         publish_overlay_arg, target_frame_arg, depth_image_arg,
-        camera_info_arg, sync_slop_arg, tf_timeout_arg, nms_radius_arg,
+        camera_info_arg, sync_slop_arg, tf_timeout_arg,
+        tf_fallback_latest_arg, nms_radius_arg,
         position_alpha_arg, confidence_step_arg, confidence_decay_arg,
         min_det_conf_arg, min_valid_pixels_arg, visibility_timeout_arg,
+        permanent_after_obs_arg, entity_merge_radius_arg,
+        # Day 6.5 — masks + depth projector tuning
+        use_masks_arg, masks_topic_arg,
+        bbox_shrink_arg, depth_percentile_arg,
         LogInfo(msg=["[day6.launch] target_frame=", target_frame]),
         LogInfo(msg=["[day6.launch] yoloe classes=", classes]),
         LogInfo(msg=["[day6.launch] sync_slop=", sync_slop,
@@ -227,6 +301,8 @@ def generate_launch_description() -> LaunchDescription:
         LogInfo(msg=["[day6.launch] nms_radius=", nms_radius_m,
                      " decay_rate=", confidence_decay_rate,
                      " min_det_conf=", min_detection_confidence]),
+        LogInfo(msg=["[day6.launch] merge_radius=", entity_merge_radius_m,
+                     " permanent_after=", permanent_after_observations]),
         LogInfo(msg=["[day6.launch] min_valid_pixels=", min_valid_pixels]),
         yoloe_node,
         depth_projector,

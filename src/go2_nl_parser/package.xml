@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2_nl_parser</name>
+  <version>0.1.0</version>
+  <description>Lightweight natural-language → SemanticTask parser for the
+    Go2 semantic navigation Phase B operator console. Reads
+    /user_command (std_msgs/String) such as "go to chair" or "find the
+    table" and republishes a go2_msgs/SemanticTask on
+    /semantic_task/request. Pure regex + keyword fuzzy match — no
+    external NLP dependency.</description>
+  <maintainer email="go2@example.com">go2_team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>go2_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -1,0 +1,111 @@
+# slam_toolbox_motion_smooth.yaml
+#
+# OPTIONAL alternate slam_toolbox config that prioritises smooth RViz
+# motion playback over Nav2 controller TF reliability. Use ONLY when:
+#
+#   1. You are debugging robot motion / sensor calibration in RViz,
+#   2. Fixed Frame=map (or world) feels noticeably "delayed", and
+#   3. You are NOT actively running a Nav2 goal (or you accept that the
+#      controller WILL log "Lookup would require extrapolation into the
+#      future" warnings and may abort goals).
+#
+# What's different from slam_toolbox_mapping.yaml
+#   transform_publish_period:   0.55  →  0.10
+#       Republishes map→odom every 100 ms instead of every 550 ms.
+#       Side-effects:
+#         * RViz robot model + costmap + semantic markers stop ghosting.
+#         * The "post-date" offset added to every published stamp drops
+#           proportionally (read the long block comment in the original
+#           yaml — `published_stamp = last_scan_stamp + post_date`).
+#           When post_date < lidar_scan_period (~0.3 s in this sim),
+#           Nav2's controller_server tick at "now" lands AFTER the
+#           latest available stamp and tf2 raises the dreaded
+#           ExtrapolationException ("Lookup would require extrapolation
+#           into the future"). The controller then aborts the
+#           follow_path action; bt_navigator gives up; goal fails.
+#
+# How to use
+#   ros2 launch go2_bringup_sim nav2.launch.py slam:=True \
+#       slam_params_file:=$(ros2 pkg prefix go2_bringup_sim)/share/\
+#       go2_bringup_sim/config/slam/slam_toolbox_motion_smooth.yaml
+#
+# How to recover from a Nav2 abort caused by this config
+#   Either:
+#     a) Re-launch with the default slam_toolbox_mapping.yaml (drops
+#        post_date back to 0.55 s; Nav2 controller stops timing out), OR
+#     b) In RViz, switch Fixed Frame to `odom` — RobotModel becomes
+#        smooth without changing slam_toolbox at all (see
+#        rviz/go2_motion_debug.rviz for a ready-made config).
+#
+# Recommended workflow
+#   * Default (this repo): use slam_toolbox_mapping.yaml + Fixed Frame=
+#     odom on the motion-debug RViz, Fixed Frame=map on the semantic
+#     RViz. No yaml swap needed for normal demo flow.
+#   * Use this file ONLY when you have a specific need to inspect the
+#     map → odom correction at high temporal resolution and you're not
+#     running Nav2.
+
+slam_toolbox:
+  ros__parameters:
+    # ---- Solver ---------------------------------------------------
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ---- Frames & topics ------------------------------------------
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping
+
+    # ---- Time / publishing ----------------------------------------
+    debug_logging: false
+    throttle_scans: 3
+    # KEY KNOB FOR THIS PRESET — see file header for the trade-off.
+    transform_publish_period: 0.10
+    map_update_interval: 1.0
+    resolution: 0.05
+    minimum_time_interval: 0.1
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+
+    # ---- Sensor model (matches slam_toolbox_mapping.yaml) ---------
+    max_laser_range: 12.0
+    minimum_travel_distance: 0.1
+    minimum_travel_heading: 0.10
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 12.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    do_loop_closing: false
+    loop_search_maximum_distance: 3.0
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # ---- Correlation parameters ------------------------------------
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # ---- Loop closure correlation parameters -----------------------
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # ---- Scan matcher ----------------------------------------------
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true

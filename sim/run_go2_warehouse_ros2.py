@@ -87,10 +87,18 @@ _parser.add_argument("--camera-frame-skip", type=int, default=3,
                           "(3 -> ~20 Hz at 60 Hz physics).")
 _parser.add_argument(
     "--lidar-config",
-    default="OS1_REV6_32ch10hz1024res",
+    default="OS1_REV6_32ch10hz512res",
     help="RTX LiDAR config name from isaacsim.sensors.rtx/data/lidar_configs. "
-         "Default OS1_REV6_32ch10hz1024res = Ouster OS1, 32 channels @ 10 Hz, "
-         "1024 horizontal resolution. Used as a Livox MID-360 stand-in (NVIDIA "
+         "Default is OS1_REV6_32ch10hz512res — the stable demo default. "
+         "1024res (OS1_REV6_32ch10hz1024res) caused intermittent RTX LiDAR "
+         "stalls of ~15-18s on /lidar/points and /scan in this Isaac Sim 5.1 "
+         "setup, which starved SLAM and TF; see docs/HOW_TO_RUN.md and "
+         "scripts/record_lidar_health.sh. 512res keeps the same OS1 "
+         "32-channel family @ 10 Hz but halves horizontal resolution, reducing "
+         "RTX LiDAR load while preserving frame_id, topic names, and downstream "
+         "pointcloud_to_laserscan compatibility. Override at launch time, e.g. "
+         "`bash scripts/run_warehouse_ros2.sh --lidar-config "
+         "OS1_REV6_32ch10hz1024res`. Used as a Livox MID-360 stand-in (NVIDIA "
          "doesn't ship a Livox MID-360 config in 5.1). Set to '' to disable.",
 )
 _parser.add_argument("--no-lidar", action="store_true",
@@ -128,6 +136,66 @@ _parser.add_argument("--policy-checkpoint", default="",
 _parser.add_argument("--policy-decimation", type=int, default=4,
                      help="Policy decimation (physics ticks per policy step). "
                           "Isaac Lab default is 4 at 200 Hz sim = 50 Hz policy.")
+# --- Optional spawn override (debug/policy validation) ---------------------
+# Default spawn from warehouse_scene.GO2_SPAWN_XYZ is (-4, -4) — the SW
+# warehouse corner. SLAM/Nav2/check_day*.sh expect that spawn so we don't
+# touch the constants. But for policy validation it's useful to drop Go2
+# in the middle of the room so the cmd_vel test isn't dominated by wall
+# collisions before we've had time to observe sustained gait. Pass e.g.
+# `--start-xy 0 0` to spawn at the warehouse centre. This ONLY shifts the
+# Go2 prim's translate; it does NOT change the world→map TF or anything
+# downstream (so SLAM-based runs should NOT use this flag).
+_parser.add_argument("--start-xy", type=float, nargs=2, metavar=("X", "Y"),
+                     default=None,
+                     help="Override Go2 spawn XY (meters, world frame). "
+                          "If unset, uses warehouse_scene.GO2_SPAWN_XYZ "
+                          "(default: -4 -4). Use '--start-xy 0 0' to spawn "
+                          "in the room centre for policy stability "
+                          "validation. Z stays at GO2_SPAWN_XYZ[2] and yaw "
+                          "stays at GO2_SPAWN_YAW_DEG. WARNING: do NOT use "
+                          "this with SLAM/Nav2 — the world→map TF in "
+                          "tf_and_scan.launch.py is hard-coded to (-4, -4).")
+# --- Day 8+ semantic collision proxy toggle --------------------------------
+# build_full_warehouse(add_semantic_collision_proxies=True) drops a
+# leg-level proxy *constellation* (3 thin 0.10x0.10x0.80 m columns
+# around the person's feet) so 2D LiDAR + PointCloud2 BFS clustering
+# + nav2's costmap inflation always see a stable obstacle right where
+# the YOLOE/depth_projector centroid lives.
+#
+# Default       → 3-column proxy, dim grey + low alpha. YOLOE still
+#                 detects the person USD silhouette (proxy below the
+#                 torso, well outside the camera's "person bbox"
+#                 line of sight). LiDAR raycasts hit the columns.
+# --invisible-collision-proxies
+#               → proxies present in the scene but UsdGeom.MakeInvisible'd.
+#                 Both RGB and LiDAR walk through them. Use this only
+#                 for perception-only stress tests when you want to
+#                 confirm depth_projector handles the *unaided* person
+#                 USD geometry.
+# --no-collision-proxies
+#               → no proxy prims at all. Costmap will not inflate
+#                 around the person; useful for "let Go2 walk through
+#                 a person" exploration tests.
+_parser.add_argument(
+    "--no-collision-proxies", dest="collision_proxies",
+    action="store_false",
+    help="Skip ALL semantic collision proxies (currently the person "
+         "leg-column constellation). Default is to add them so "
+         "nav2's costmap and PointCloud2 cluster anchoring both see "
+         "a stable obstacle at the semantic landmark's centroid.",
+)
+_parser.set_defaults(collision_proxies=True)
+_parser.add_argument(
+    "--invisible-collision-proxies", dest="proxy_visible_to_lidar",
+    action="store_false",
+    help="Force the proxy constellation to be invisible (legacy "
+         "pre-Day 9 behaviour). RTX camera + LiDAR both walk "
+         "through the columns. Use only for perception-only "
+         "stress tests; the default leg-level proxies are already "
+         "YOLO-friendly (dim+below-torso) so this flag is rarely "
+         "needed.",
+)
+_parser.set_defaults(proxy_visible_to_lidar=True)
 _parser.add_argument("--diag", choices=("none", "boot-only", "after-build",
                                         "after-sensors", "after-graph"),
                      default="none",
@@ -186,12 +254,39 @@ except Exception:
 if SimulationApp is None:
     from omni.isaac.kit import SimulationApp  # pre-4.1 fallback
 
-simulation_app = SimulationApp({
+# Env-var kill switch for MotionBVH. Set `GO2_DISABLE_MOTION_BVH=1` to
+# skip both the SimulationApp helper key AND the post-boot carb writes.
+# Useful for A/B comparing the LiDAR-stall fix vs baseline without
+# editing this file. We ALSO use this knob when the operator just hit
+# a fresh-driver RtPso shader-compile stall during boot — temporarily
+# disabling MotionBVH lets you confirm the rest of the stack still
+# comes up, then re-enable once the shader cache is warmed up.
+_MOTION_BVH_DISABLED = os.environ.get(
+    "GO2_DISABLE_MOTION_BVH", ""
+).strip().lower() in ("1", "true", "yes", "on")
+_MOTION_BVH_ENGINES = os.environ.get(
+    "GO2_MOTION_BVH_ENGINES", "0,1,2,3,4"
+).strip()
+
+_simulation_app_kwargs = {
     "headless": ARGS.headless,
     "renderer": "RayTracedLighting",
     "width": RGB_W,
     "height": RGB_H,
-})
+}
+if not _MOTION_BVH_DISABLED:
+    # Newer Kit builds accept an `enable_motion_bvh` shorthand that
+    # SimulationApp translates into three `--/renderer/raytracingMotion/...`
+    # args at Kit launch time. Older 5.1 builds silently ignore unknown
+    # SimulationApp keys, so the dict echo is safe — the post-Kit carb
+    # block below is the canonical source of truth either way.
+    _simulation_app_kwargs["enable_motion_bvh"] = True
+
+print(
+    f"[run_ros2] motion_bvh disabled={_MOTION_BVH_DISABLED} "
+    f"engines={_MOTION_BVH_ENGINES!r}"
+)
+simulation_app = SimulationApp(_simulation_app_kwargs)
 
 # --- Imports that need Kit running ------------------------------------------
 import numpy as np  # noqa: E402
@@ -231,6 +326,68 @@ try:
     print("[run_ros2] carb: publish_without_verification=True")
 except Exception as exc:  # pragma: no cover
     print(f"[run_ros2] WARN could not set publish_without_verification: {exc}")
+
+# RTX LiDAR Motion BVH — renderer-level acceleration structure for
+# moving geometry. Per omni::sensors::nv::Settings.h
+# (extscache/.../omni/sensors/Settings.h line 65) the carb key is
+# "/renderer/raytracingMotion/enabled" with documented default=true,
+# but on Isaac Sim 5.1 + RTX 5090 we observed:
+#
+#   [Warning] [omni.sensors.nv.lidar.lidar_core.plugin]
+#   MotionBVH for lidar model not enabled. This will result in an
+#   incorrect point cloud without motion effects!
+#
+# combined with intermittent ~14 s /lidar/points stalls that starve
+# slam_toolbox (map->odom TF freezes, depth_projector starts logging
+# table/person _failed_tf, the whole semantic pipeline degrades).
+# The root cause is a Kit boot path that flips the global enable
+# off after the extension toml's default has been read, and/or
+# leaves per-Hydra-engine masking unset so the LiDAR's renderer
+# instance never sees Motion BVH even when the global key is true.
+#
+# Three keys together force MotionBVH on across every Hydra engine:
+#   /renderer/raytracingMotion/enabled
+#       Global toggle. The header constant carbides the lidar_core
+#       warning's check.
+#   /renderer/raytracingMotion/enableHydraEngineMasking
+#       Tells the renderer to honour the per-engine bitmask below
+#       instead of using a hard-coded all-on / all-off.
+#   /renderer/raytracingMotion/enabledForHydraEngines
+#       Bitmask "0,1,2,3,4" = all five Hydra engine slots.
+if _MOTION_BVH_DISABLED:
+    print(
+        "[run_ros2] motion_bvh: SKIPPED carb writes (GO2_DISABLE_MOTION_BVH=1)"
+    )
+    # Read back whatever Kit defaulted to, so we can tell baseline apart
+    # from "we touched it" in the log.
+    try:
+        for _k in (
+            "/renderer/raytracingMotion/enabled",
+            "/renderer/raytracingMotion/enableHydraEngineMasking",
+            "/renderer/raytracingMotion/enabledForHydraEngines",
+        ):
+            print(f"[run_ros2] carb: {_k}={_carb_settings.get(_k)!r}")
+    except Exception as exc:  # pragma: no cover
+        print(f"[run_ros2] WARN could not read raytracingMotion keys: {exc}")
+else:
+    try:
+        _MOTION_BVH_KEYS = (
+            ("/renderer/raytracingMotion/enabled", True),
+            ("/renderer/raytracingMotion/enableHydraEngineMasking", True),
+            ("/renderer/raytracingMotion/enabledForHydraEngines",
+             _MOTION_BVH_ENGINES),
+        )
+        for _k, _v in _MOTION_BVH_KEYS:
+            _carb_settings.set(_k, _v)
+        # Read each one back and print the actual stored value so the
+        # operator sees in the launch log whether Kit accepted our writes
+        # (it sometimes coerces strings vs lists differently across 5.x
+        # point releases). If a key still reads as None / False we know
+        # MotionBVH is still off and need to fall back to plan C.
+        for _k, _ in _MOTION_BVH_KEYS:
+            print(f"[run_ros2] carb: {_k}={_carb_settings.get(_k)!r}")
+    except Exception as exc:  # pragma: no cover
+        print(f"[run_ros2] WARN could not set raytracingMotion keys: {exc}")
 
 import omni.replicator.core as rep  # noqa: E402  (auto-loaded)
 
@@ -275,7 +432,19 @@ def build_scene():
     live World instance. This replaces the old open_stage(saved_usd) path."""
     print("[run_ros2] Building warehouse scene (fresh stage)...")
     world = ws.build_world()
-    ws.build_full_warehouse(world)
+    # ARGS is the module-level argparse Namespace populated at import
+    # time (line ~171) — `args` is local to main() and not in scope
+    # here. Defaulting to True keeps the proxy on for legacy callers
+    # that import this module without going through __main__.
+    _add_proxies = bool(getattr(ARGS, "collision_proxies", True))
+    _proxy_lidar_visible = bool(
+        getattr(ARGS, "proxy_visible_to_lidar", True)
+    )
+    ws.build_full_warehouse(
+        world,
+        add_semantic_collision_proxies=_add_proxies,
+        semantic_proxy_visible_to_lidar=_proxy_lidar_visible,
+    )
 
     # Let lights / colliders settle before sensors attach.
     try:
@@ -962,6 +1131,30 @@ def main():
         simulation_app.close()
         return
 
+    # Optional spawn-XY override. Patched onto warehouse_scene BEFORE
+    # build_scene runs so build_go2_spawn() places the Go2 USD reference at
+    # the new XY from the very first frame — that way world.reset()
+    # registers the articulation with PhysX at the correct pose, and the
+    # PolicyLocomotionBackend's get_world_pose() seed for _init_base_xy
+    # also picks up the override automatically. Keeping z and yaw at the
+    # warehouse defaults preserves the training-distribution warmup pose
+    # (z=0.40, yaw=+45°).
+    if ARGS.start_xy is not None:
+        new_x, new_y = float(ARGS.start_xy[0]), float(ARGS.start_xy[1])
+        old_x, old_y, z = ws.GO2_SPAWN_XYZ
+        ws.GO2_SPAWN_XYZ = (new_x, new_y, z)
+        print(
+            f"[run_ros2] --start-xy override: GO2_SPAWN_XYZ "
+            f"({old_x:.2f},{old_y:.2f},{z:.2f}) → "
+            f"({new_x:.2f},{new_y:.2f},{z:.2f})  "
+            f"yaw stays at {ws.GO2_SPAWN_YAW_DEG:.1f}°"
+        )
+        print(
+            "[run_ros2] WARN --start-xy is for policy validation only; "
+            "world→map TF in tf_and_scan.launch.py is still hard-coded "
+            "at (-4,-4). Do NOT pair with SLAM/Nav2."
+        )
+
     world = build_scene()
     if ARGS.diag == "after-build":
         print("[run_ros2] diag=after-build — scene built, exiting.")
@@ -1002,6 +1195,36 @@ def main():
                   f"Topic: {ARGS.cmd_vel_topic}")
         except Exception as exc:
             print(f"[run_ros2] WARN /cmd_vel driver disabled: {exc}")
+            traceback.print_exc()
+
+    # Register the locomotion driver as a physics callback so it runs
+    # before EVERY physics substep, not once per render frame. This is
+    # critical for the policy backend: with physics_dt=1/200s and
+    # rendering_dt=1/60s, World.step(render=True) executes ~4 physics
+    # substeps per render frame. If we only called driver.step() once
+    # per render frame, the policy would tick at 60/decimation = 15 Hz
+    # instead of the trained 200/decimation = 50 Hz, and Go2 would
+    # collapse on the first second. Calling it as a physics callback
+    # gives us 200 Hz substep ticks; PolicyLocomotionBackend's internal
+    # decimation counter then divides that down to 50 Hz inference, in
+    # exact lockstep with how Isaac Lab trained the checkpoint.
+    if driver is not None:
+        try:
+            world.add_physics_callback(
+                "locomotion_driver",
+                lambda step_dt: driver.step(dt=step_dt),
+            )
+            print(
+                f"[run_ros2] driver.step registered as physics callback "
+                f"(physics_dt={world.get_physics_dt():.4f}s, "
+                f"rendering_dt={world.get_rendering_dt():.4f}s)"
+            )
+        except Exception as exc:
+            print(
+                f"[run_ros2] WARN add_physics_callback failed ({exc}); "
+                f"falling back to per-render-frame driver.step (not "
+                f"recommended for policy backend)."
+            )
             traceback.print_exc()
 
     # Prime physics + OmniGraph before the main loop. On Isaac 5.1 the
@@ -1052,9 +1275,18 @@ def main():
     print("=" * 70)
     sys.stdout.flush()
     last_print = time.time()
+    # Whether driver.step needs to be invoked from the render loop
+    # depends on whether add_physics_callback succeeded above. If it did,
+    # driver.step runs INSIDE world.step(render=True) at every physics
+    # substep (200 Hz with physics_dt=1/200s), which is what the policy
+    # backend expects. If it didn't, fall back to one driver tick per
+    # render frame so the kinematic backend at least keeps moving.
+    driver_in_callback = (
+        driver is not None and world.physics_callback_exists("locomotion_driver")
+    )
     while simulation_app.is_running():
         world.step(render=True)
-        if driver is not None:
+        if driver is not None and not driver_in_callback:
             driver.step(dt=world.get_physics_dt())
         if time.time() - last_print > 5.0:
             last_print = time.time()

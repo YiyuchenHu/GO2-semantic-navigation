@@ -45,7 +45,79 @@ WARNs are downstream effects of the perception bug listed below
 the sim chair as `stool`; goal_pose silent + candidates empty
 because all ring samples fall in unknown costmap cells).
 
-### Perception-layer bugs blocking the full happy-path
+### Day 7 is NOT closed yet — required follow-up before opening Day 8
+
+The algorithm layer + Nav2 integration is verified, and Go2 visibly
+drives toward the selected target for several seconds. But it does
+NOT reach the desk: the entity is pruned mid-traverse (#9) because
+the underlying perception output (#8) has a residual ~1.7× distance
+bias and frame-to-frame projection jitter. Both are perception-layer
+bugs that have been confirmed to affect the demo end-to-end. The
+"Day 6.5" patch session below MUST close them before the project
+can move on to Day 8 (frontier exploration); otherwise the
+multiplicative position error compounds into "Go2 plans goals
+outside the warehouse" and the persistence loop kills any
+EXPLORE↔APPROACH state machine on Day 9.
+
+#### Day 6.5 acceptance gate (run BEFORE starting Day 8)
+
+| # | Check | Pass criterion |
+|---|-------|----------------|
+| 1 | Static accuracy: `desk_001.pose_map` vs ground-truth sim position when Go2 stationary at spawn (Go2 facing desk) | distance error < 30 cm; class_label stable; confidence ≥ 0.5 for ≥ 30 s |
+| 2 | Dynamic stability: walk Go2 sideways 5 m parallel to desk, RViz-visible marker drift | < 30 cm wander in odom |
+| 3 | Track id persistence: turn Go2 away from desk for 5 s, then turn back | same `entity_id` re-acquires (no `desk_002`/`desk_003` cycle) |
+| 4 | End-to-end approach: send `target_class:=desk` (or chair after #1 stable), Go2 reaches the approach pose (1.0 m from desk) | NavigateToPose action result is `STATUS_SUCCEEDED`; Go2 stops within 0.3 m of `approach_distance` from the actual desk |
+
+All four pass → Day 7 truly closed → start Day 8.
+Any one fails → keep iterating Day 6.5 within its 2-hour budget.
+
+#### Day 6.5 work plan (max 2 hours, scope-locked)
+
+**In scope** (the 1.7× bias + persistence are the only blockers):
+
+1. **Mask-edge depth bleed fix** (~1 h, depth_projector_node):
+   * **Cheapest first** — bbox shrink. Inset bbox by 20 % on each
+     side and re-take the depth median over the inner region only.
+     Five-line edit. Validate against check #1 above.
+   * **If shrink isn't enough** — switch from `np.median` to
+     `np.percentile(depth[valid], 30)` (lower percentile, biased
+     toward near surfaces). The far-wall pixels that bleed in
+     through mask edges sit at the high-depth tail; clipping them
+     with a percentile cuts them out.
+   * **Out of scope this session** — using the InstanceMask
+     directly. That requires routing the mask from yoloe_detector
+     through depth_projector, plus the actual mask-aware median.
+     Worth doing post-MVP, NOT in Day 6.5.
+
+2. **Aggregator persistence patch** (~15 min, parameters only):
+   ```bash
+   ros2 param set /semantic_memory_aggregator nms_radius_m 0.8
+   ros2 param set /semantic_memory_aggregator confidence_decay_rate 0.02
+   ros2 param set /semantic_memory_aggregator visibility_timeout_sec 5.0
+   ros2 param set /target_selector min_confidence 0.20
+   ```
+   These are band-aids documented in `docs/known_issues.md` #9.
+   Once #1 reduces frame-to-frame XY drift, these can be tuned
+   tighter again, but for the Day 6.5 demo they're the right
+   pragmatic floor.
+
+3. **Validation** (~45 min): the four checks in the gate table
+   above, reproduced as a one-shot script if time permits
+   (`scripts/check_day6_5.sh` would extend `check_day6.sh` with
+   stationary error + sideways walk + turn-away-and-back +
+   end-to-end approach).
+
+**Out of scope** (do NOT touch in Day 6.5):
+
+- depth_projector overall rewrite
+- yoloe_detector mask publishing changes
+- Day 7 target_selector / approach_goal_planner refactors
+  (they're already correct)
+- Nav2 parameter tuning (slam_toolbox stalls etc. are tracked
+  separately, not blocking #1–#4)
+- Any new feature
+
+#### Old "Verification snapshot" (kept for traceability)
 
 These are NOT Day 7 algorithm bugs; they are upstream issues that
 the next session should fix before declaring full end-to-end Nav2

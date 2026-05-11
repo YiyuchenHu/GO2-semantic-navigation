@@ -14,6 +14,12 @@
 #     bash scripts/run_warehouse_ros2.sh
 #     bash scripts/run_warehouse_ros2.sh --rgb-resolution 640x480
 #     bash scripts/run_warehouse_ros2.sh --diag after-build
+#
+# Convenience switch:
+#     bash scripts/run_warehouse_ros2.sh --policy
+# expands to:
+#     ... --locomotion policy --policy-checkpoint policies/go2_flat.pt
+# Use --policy-checkpoint to override the checkpoint location explicitly.
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -70,13 +76,42 @@ for _a in "$@"; do
 		--no-headless|--headless) _add_gui=0 ;;
 	esac
 done
+
+# Expand `--policy` into a full Isaac Lab Go2 flat policy invocation.
+# We inject defaults BEFORE the user's args so an explicit
+# --policy-checkpoint / --locomotion in their args still wins.
+_policy_args=()
+_user_args=()
+_have_policy_shortcut=0
+for _a in "$@"; do
+	case "$_a" in
+		--policy)
+			_have_policy_shortcut=1
+			;;
+		*)
+			_user_args+=("$_a")
+			;;
+	esac
+done
+if [ "${_have_policy_shortcut}" = 1 ]; then
+	_default_ckpt="${PROJECT_ROOT}/policies/go2_flat.pt"
+	if [ ! -f "${_default_ckpt}" ]; then
+		echo "[run_warehouse_ros2] ERROR: --policy requested but checkpoint missing: ${_default_ckpt}" >&2
+		echo "  Copy a TorchScript .pt there, e.g.:" >&2
+		echo "    cp <isaaclab>/logs/rsl_rl/unitree_go2_flat/<run>/exported/policy.pt ${_default_ckpt}" >&2
+		exit 1
+	fi
+	_policy_args+=(--locomotion policy --policy-checkpoint "${_default_ckpt}")
+	echo "[run_warehouse_ros2] --policy → ${_policy_args[*]}" >&2
+fi
+
 _extra_args=()
 if [ "${_add_gui}" = 1 ]; then
 	_extra_args+=("--no-headless")
 fi
 
 echo "[run_warehouse_ros2] ISAAC_SIM_ROOT=${ISAAC_SIM_ROOT}" >&2
-echo "[run_warehouse_ros2] Args: ${_extra_args[*]} $*" >&2
+echo "[run_warehouse_ros2] Args: ${_extra_args[*]} ${_policy_args[*]} ${_user_args[*]}" >&2
 
 # We deliberately DO NOT `exec` here. Running Kit as a backgrounded child plus
 # a SIGINT/SIGTERM trap lets us escalate to SIGKILL when Kit's startup
@@ -85,7 +120,7 @@ echo "[run_warehouse_ros2] Args: ${_extra_args[*]} $*" >&2
 # silently swallowed (you see ^C^C in the terminal but the prompt never
 # comes back). With the trap below, Ctrl+C here is guaranteed to return
 # the shell within ~10 s no matter what state Kit was in.
-"${ISAAC_SIM_ROOT}/python.sh" sim/run_go2_warehouse_ros2.py "${_extra_args[@]}" "$@" &
+"${ISAAC_SIM_ROOT}/python.sh" sim/run_go2_warehouse_ros2.py "${_extra_args[@]}" "${_policy_args[@]}" "${_user_args[@]}" &
 _GO2_SIM_PID=$!
 echo "[run_warehouse_ros2] Isaac Sim pid=${_GO2_SIM_PID} (Ctrl+C here to shut down)" >&2
 

@@ -18,7 +18,10 @@ Publishes
     instance masks. Disable with `publish_overlay:=false` when the
     extra encode/copy is too costly.
 
-Why a separate node from `perception_node`
+/detections/masks (go2_msgs/InstanceMaskArray, default qos depth 10)
+    Per-frame masks index-aligned with `/detections` (same
+    ``header.stamp``); depth_projector consumes sparse indices for
+    median depth sampling. Disable by setting ``masks_topic`` to ``""``.
 ------------------------------------------
 The legacy `perception_node` ships the project's custom
 `go2_msgs/Detection2DArray` (with chair-only aliasing baked into the
@@ -70,6 +73,7 @@ from vision_msgs.msg import (
     Detection2DArray,
     ObjectHypothesisWithPose,
 )
+from go2_msgs.msg import InstanceMask, InstanceMaskArray
 
 from .yoloe_backend import YoloeBackend
 
@@ -105,6 +109,14 @@ class YoloeDetectorNode(Node):
         self.declare_parameter("input_topic", "/camera/color/image_raw")
         self.declare_parameter("detections_topic", "/detections")
         self.declare_parameter("overlay_topic", "/detections/image")
+        # Day 6.5 — publish per-detection segmentation masks as a
+        # parallel `go2_msgs/InstanceMaskArray` on `masks_topic`. The
+        # array is indexed-aligned with `detections_topic`: masks[i]
+        # is the mask for detections[i] of the same `header.stamp`.
+        # depth_projector uses these to sample depth at mask pixels
+        # only (median), eliminating the bbox-edge mask-bleed bias.
+        # Set to "" to disable mask publishing.
+        self.declare_parameter("masks_topic", "/detections/masks")
         self.declare_parameter("publish_overlay", True)
         # When True, repaint a translucent red mask over each detected
         # instance on the overlay. -seg weights only — gracefully
@@ -126,7 +138,9 @@ class YoloeDetectorNode(Node):
         input_topic = str(self.get_parameter("input_topic").value)
         detections_topic = str(self.get_parameter("detections_topic").value)
         overlay_topic = str(self.get_parameter("overlay_topic").value)
+        masks_topic = str(self.get_parameter("masks_topic").value)
         self._publish_overlay = bool(self.get_parameter("publish_overlay").value)
+        self._publish_masks = bool(masks_topic)
         self._draw_masks = bool(self.get_parameter("draw_masks").value)
         self._log_period = float(self.get_parameter("log_period_sec").value)
 
@@ -185,6 +199,13 @@ class YoloeDetectorNode(Node):
         self._pub_det = self.create_publisher(
             Detection2DArray, detections_topic, 10
         )
+        # Mask publisher matches /detections QoS (RELIABLE) so depth_projector
+        # sees no drops even when YOLOE inference paces ahead of consumers.
+        self._pub_masks = None
+        if self._publish_masks:
+            self._pub_masks = self.create_publisher(
+                InstanceMaskArray, masks_topic, 10
+            )
         self._pub_overlay = None
         if self._publish_overlay:
             self._pub_overlay = self.create_publisher(
@@ -203,6 +224,7 @@ class YoloeDetectorNode(Node):
         self.get_logger().info(
             f"YOLOE detector subscribed to {input_topic!r} "
             f"-> publishing {detections_topic!r}"
+            + (f", masks={masks_topic!r}" if self._publish_masks else "")
             + (f", overlay={overlay_topic!r}" if self._publish_overlay else "")
         )
 
@@ -216,8 +238,22 @@ class YoloeDetectorNode(Node):
         det_arr = Detection2DArray()
         det_arr.header = msg.header
 
+        # Always publish a parallel (possibly empty) InstanceMaskArray with
+        # the same header.stamp so depth_projector's 4-input
+        # ApproximateTimeSynchronizer always receives the mask channel
+        # alongside /detections. Skipping this on backend-unavailable /
+        # cv_bridge-fail / inference-fail branches would deadlock the
+        # synchroniser whenever any of those error paths fire.
+        mask_arr: Optional[InstanceMaskArray] = None
+        if self._publish_masks:
+            mask_arr = InstanceMaskArray()
+            mask_arr.header = msg.header
+            mask_arr.backend_name = "yoloe"
+
         if not self._backend.available:
             self._pub_det.publish(det_arr)
+            if self._pub_masks is not None and mask_arr is not None:
+                self._pub_masks.publish(mask_arr)
             self._tick_heartbeat(0)
             return
 
@@ -237,6 +273,8 @@ class YoloeDetectorNode(Node):
                 throttle_duration_sec=2.0,
             )
             self._pub_det.publish(det_arr)
+            if self._pub_masks is not None and mask_arr is not None:
+                self._pub_masks.publish(mask_arr)
             self._tick_heartbeat(0)
             return
 
@@ -252,11 +290,16 @@ class YoloeDetectorNode(Node):
                 throttle_duration_sec=2.0,
             )
             self._pub_det.publish(det_arr)
+            if self._pub_masks is not None and mask_arr is not None:
+                self._pub_masks.publish(mask_arr)
             self._tick_heartbeat(0)
             return
 
-        # Build Detection2DArray
-        for d in detections:
+        frame_h, frame_w = frame.shape[:2]
+
+        # Build Detection2DArray + InstanceMaskArray in lockstep so
+        # depth_projector can match by array index.
+        for i, d in enumerate(detections):
             x1, y1, x2, y2 = d["bbox_xyxy"]
             det = Detection2D()
             det.header = msg.header
@@ -276,7 +319,62 @@ class YoloeDetectorNode(Node):
             det.results.append(hyp)
             det_arr.detections.append(det)
 
+            if mask_arr is None:
+                continue
+
+            # Always append a mask slot per detection so the array
+            # index stays aligned. When the backend has no mask
+            # (plain .pt weights, or this particular instance was
+            # below the seg confidence floor) we send an empty
+            # InstanceMask with width=height=0; subscriber treats
+            # that as "fall back to bbox sampling for this one".
+            m = InstanceMask()
+            m.header = msg.header
+            # Stable per-frame id helps debugging in `ros2 topic echo`,
+            # but the contract is index-alignment. stamp+index keeps
+            # the id deterministic and short.
+            m.detection_id = (
+                f"{msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}_{i}"
+            )
+            m.class_label = str(d["class_id"])
+            m.score = float(d["score"])
+
+            raw_mask = d.get("mask")
+            if isinstance(raw_mask, np.ndarray):
+                # Backend returns the mask at the inference letterbox
+                # resolution; resize to the source frame's resolution
+                # so the (width, height) declared in the message is
+                # also the camera_color frame resolution and the
+                # `indices` flat-index into that exact buffer.
+                mask_uint8 = raw_mask.astype(np.uint8)
+                if mask_uint8.shape[:2] != (frame_h, frame_w):
+                    mask_uint8 = cv2.resize(
+                        mask_uint8,
+                        (frame_w, frame_h),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                flat_indices = np.flatnonzero(mask_uint8 > 0)
+                # Cap at 50k indices to keep the message bounded.
+                # Even a 640x480 chair filling 30% of frame is ~92k
+                # pixels; downsample with stride to fit. Median
+                # over 50k samples is statistically identical to
+                # over 92k for our purposes.
+                if flat_indices.size > 50000:
+                    stride = max(1, flat_indices.size // 50000)
+                    flat_indices = flat_indices[::stride]
+                m.width = int(frame_w)
+                m.height = int(frame_h)
+                m.indices = flat_indices.astype(np.uint32).tolist()
+            else:
+                m.width = 0
+                m.height = 0
+                m.indices = []
+
+            mask_arr.masks.append(m)
+
         self._pub_det.publish(det_arr)
+        if self._pub_masks is not None and mask_arr is not None:
+            self._pub_masks.publish(mask_arr)
 
         # Optional overlay
         if self._publish_overlay and self._pub_overlay is not None:
