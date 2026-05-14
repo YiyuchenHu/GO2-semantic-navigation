@@ -235,7 +235,7 @@ fi
 # 4. /detections empty-array invariant
 # ----------------------------------------------------------------------------
 # When the camera doesn't see anything matching the prompts, the node
-# must STILL publish empty Detection2DArrays (covers硬指标 2).
+	# must STILL publish empty Detection2DArrays (covers hard requirement 2).
 # This is implicitly verified by check 3: if /detections is flowing
 # at 5+ Hz, it must be publishing empty arrays during the gaps when
 # the camera is on bare walls. Skip the explicit assertion here to

@@ -1,50 +1,52 @@
-# Go2 Semantic Navigation — 端到端调用手册
+# Go2 Semantic Navigation — End-to-End Operations Manual
 
-> 写给「几周后回来的自己」：以下为**可直接复制**的命令模板；launch 文件名已与仓库 `src/go2_bringup_sim/launch/` **静态核对**存在。  
-> **未在本机执行**仿真或 `colcon build`；若包未编译或 `install/setup.bash` 过期，请先自行构建后再运行。
+> A reference for your future self (coming back a few weeks later): the commands below are **ready to copy-paste**; launch file names have been **statically verified** against `src/go2_bringup_sim/launch/` in this repository.  
+> The simulation and `colcon build` have **not been executed on this machine**; if packages are not built or `install/setup.bash` is outdated, run a build first.
 
 ---
 
-## A. 环境准备
+## A. Environment Setup
 
-### A.1 每个新终端都要做的 sourcing
+### A.1 Sourcing Required in Every New Terminal
 
 ```bash
-# 若开过 conda，建议先退出（避免 Python/rclpy 版本错乱）
+# If conda is active, deactivate it first (avoids Python/rclpy version conflicts)
 conda deactivate 2>/dev/null || true
 
 cd /home/yiyuchenhu/Desktop/2026spring/2026spring/CINQ389/GO2/GO2-semantic-navigation
 
-# 方式一：项目脚本（推荐，含 PROJECT_ROOT / ROS_DISTRO / workspace overlay）
+# Method 1: project script (recommended — sets PROJECT_ROOT / ROS_DISTRO / workspace overlay)
 source scripts/dev_env.sh
 
-# 方式二手动（等价骨架）
+# Method 2: manual (equivalent skeleton)
 # source /opt/ros/jazzy/setup.bash
 # source install/setup.bash
 ```
 
-### A.2 进程清理 — 干掉所有残留（推荐每次重启前都跑一次）
+### A.2 Process Cleanup — Kill All Leftover Processes (recommended before every restart)
 
 ```bash
 cd /home/yiyuchenhu/Desktop/2026spring/2026spring/CINQ389/GO2/GO2-semantic-navigation
-bash scripts/kill_all.sh                  # 默认：保留 Isaac Sim、保留 RViz
-bash scripts/kill_all.sh --include-rviz   # 顺便关掉 RViz
-bash scripts/kill_all.sh --all            # 连 Isaac Sim 一起关（少用）
-bash scripts/kill_all.sh --dry-run        # 只看会杀谁、不真杀
+bash scripts/kill_all.sh                  # default: keeps Isaac Sim and RViz alive
+bash scripts/kill_all.sh --include-rviz   # also kills RViz
+bash scripts/kill_all.sh --all            # kills Isaac Sim as well (use sparingly)
+bash scripts/kill_all.sh --dry-run        # show what would be killed without actually killing
 ```
 
-> 为什么需要它？普通的 `Ctrl+C` 或 `pkill -f "ros2 launch"` 只杀 launch
-> **父**进程；像 `static_transform_publisher`、Nav2 的 `component_container_isolated`、
-> `slam_toolbox` 这些 C++ 子进程经常变成孤儿继续跑。下次再 `ros2 launch` 时，
-> 新旧两套同时存在，会出现：3 份相同的 TF publisher、2 个 SLAM 抢 `map->odom`、
-> Nav2 controller 报 `Unable to transform robot pose into global plan's frame`、
-> `frontier_explorer` 颜色闪烁、Go2 长时间"思考"后才行动等一系列怪现象。
-> `kill_all.sh` 会先 SIGTERM、再 SIGKILL，最后用 `ps` 校验确认无残留。
+> **Why is this needed?** A plain `Ctrl+C` or `pkill -f "ros2 launch"` only kills the launch
+> **parent** process; C++ child processes such as `static_transform_publisher`,
+> Nav2's `component_container_isolated`, and `slam_toolbox` frequently become orphans and keep
+> running. The next time `ros2 launch` is invoked, both the old and new instances coexist,
+> causing: duplicate TF publishers, two SLAM nodes competing for `map->odom`, Nav2 controller
+> reporting `Unable to transform robot pose into global plan's frame`, flickering
+> `frontier_explorer` colors, and long "thinking" delays before the robot moves.
+> `kill_all.sh` sends SIGTERM first, then SIGKILL, and finally verifies with `ps` that no
+> processes remain.
 
-### A.3 启动方式 — 推荐用 `launch_safe.sh` 包装
+### A.3 Launch Method — Recommended: Use `launch_safe.sh` as a Wrapper
 
 ```bash
-# 取代直接 `ros2 launch ...`：
+# Use instead of `ros2 launch ...` directly:
 bash scripts/launch_safe.sh go2_bringup_sim tf_and_scan.launch.py
 bash scripts/launch_safe.sh go2_bringup_sim nav2.launch.py slam:=True
 bash scripts/launch_safe.sh go2_bringup_sim day8_two_phase.launch.py
@@ -52,14 +54,14 @@ bash scripts/launch_safe.sh go2_bringup_sim day8_two_phase.launch.py \
      abort_cooldown_sec:=10.0
 ```
 
-它做的事：
-1. 用 `setsid` 把 launch 放进**独立 session**，所有子孙都共享同一个 PGID。
-2. Ctrl+C 时先优雅 SIGINT 整个进程组让 launch 跑 `OnShutdown`，等最多 4 秒；
-3. 然后 SIGKILL 整个组，**包括所有已脱离的孤儿**——不会再有"上次没杀干净"。
+What it does:
+1. Uses `setsid` to place the launch process in an **independent session**, so all descendants share the same PGID.
+2. On Ctrl+C, sends a graceful SIGINT to the entire process group (allowing `OnShutdown` hooks to run), waiting up to 4 seconds.
+3. Then sends SIGKILL to the entire group, **including any already-detached orphans** — no more "leftover from last time".
 
-直接用 `ros2 launch` 没有这层保护。养成习惯就用 `launch_safe.sh`。
+Using `ros2 launch` directly provides none of these guarantees. Make `launch_safe.sh` a habit.
 
-### A.4 ROS 日志目录权限（曾导致 `ros2` CLI 异常）
+### A.4 ROS Log Directory Permissions (can cause `ros2` CLI failures)
 
 ```bash
 sudo chown -R "$USER:$USER" ~/.ros
@@ -67,20 +69,20 @@ sudo chown -R "$USER:$USER" ~/.ros
 
 ---
 
-## B. 标准启动序列（T1–T5）
+## B. Standard Launch Sequence (T1–T5)
 
-下列顺序与 `day8_two_phase.launch.py` 文件头说明一致（约 L27–36）。
+The following order matches the header comments in `day8_two_phase.launch.py` (~L27–36).
 
-### T1 — 仿真（Isaac + warehouse）
+### T1 — Simulation (Isaac + warehouse)
 
 ```bash
 cd /home/yiyuchenhu/Desktop/2026spring/2026spring/CINQ389/GO2/GO2-semantic-navigation
 bash scripts/run_warehouse_ros2.sh
 ```
 
-**等待信号（肉眼/日志）**：仿真窗口出现 warehouse；ROS bridge 侧开始有传感器相关 topic（依你机器而定）。
+**Wait for signal (visual/log)**: the simulation window shows the warehouse; sensor-related topics begin to appear on the ROS bridge side (timing varies by machine).
 
-**验证（另开终端，已 source）**：
+**Verification (new sourced terminal)**:
 
 ```bash
 ros2 topic info /clock
@@ -89,26 +91,26 @@ ros2 topic info /lidar/points
 
 ---
 
-### T2 — 静态 TF + LaserScan（`tf_and_scan`，替代旧文档里的 chair_perception 作为主路径）
+### T2 — Static TF + LaserScan (`tf_and_scan` — replaces `chair_perception` as the primary path)
 
 ```bash
-# 推荐（Ctrl+C 时干净退出）
+# Recommended (clean exit on Ctrl+C)
 bash scripts/launch_safe.sh go2_bringup_sim tf_and_scan.launch.py
 
-# 或者裸跑（要记得用 kill_all.sh 清理）
+# Or run directly (remember to clean up with kill_all.sh)
 ros2 launch go2_bringup_sim tf_and_scan.launch.py
 ```
 
-**等待信号**：`/scan` 有 publisher。
+**Wait for signal**: `/scan` has a publisher.
 
-**验证**：
+**Verification**:
 
 ```bash
 ros2 topic info /scan | grep -E 'Publisher|Type'
 ros2 topic hz /scan
 ```
 
-**备选（旧式全感知 bringup）**：若仍使用旧教程命令，仓库也存在：
+**Alternative (legacy full-perception bringup)**: if still using old tutorial commands, this also exists in the repository:
 
 ```bash
 ros2 launch go2_bringup_sim chair_perception.launch.py
@@ -122,9 +124,9 @@ ros2 launch go2_bringup_sim chair_perception.launch.py
 bash scripts/launch_safe.sh go2_bringup_sim nav2.launch.py slam:=True
 ```
 
-**等待信号**：终端出现 Nav2 lifecycle / `Managed nodes are active` 一类就绪日志（具体措辞依 Nav2 版本）。
+**Wait for signal**: the terminal shows Nav2 lifecycle / `Managed nodes are active` or similar ready-state logs (exact wording depends on Nav2 version).
 
-**验证**：
+**Verification**:
 
 ```bash
 ros2 topic info /map
@@ -134,30 +136,31 @@ ros2 node list | grep -E 'slam_toolbox|controller_server|bt_navigator' || true
 
 ---
 
-### T4 — Day 8 全栈（两阶段推荐）
+### T4 — Day 8 Full Stack (two-phase, recommended)
 
 ```bash
 bash scripts/launch_safe.sh go2_bringup_sim day8_two_phase.launch.py
 
-# 想缩短"思考时间"（每次 Nav2 ABORT 后的软冷却），降默认 15s 到 10s：
+# To shorten "thinking time" (soft cooldown after each Nav2 ABORT), lower the default from 15s to 10s:
 bash scripts/launch_safe.sh go2_bringup_sim day8_two_phase.launch.py \
      abort_cooldown_sec:=10.0
 ```
 
-**验证（每个名字应只出现 1 次）**：
+**Verification (each name should appear only once)**:
 
 ```bash
 ros2 node list | sort | uniq -c | sort -rn | head
 ros2 node list | grep -E 'mapping_explorer|frontier_explorer|nl_parser|task_coordinator|yoloe|semantic_memory'
 ros2 service list | grep get_frontiers
-ros2 topic info /frontier_markers --verbose | grep "Publisher count"   # 应为 1
-ros2 topic info /semantic_map/markers --verbose | grep "Publisher count" # 应为 1
+ros2 topic info /frontier_markers --verbose | grep "Publisher count"   # should be 1
+ros2 topic info /semantic_map/markers --verbose | grep "Publisher count" # should be 1
 ```
 
-> 如果 `ros2 node list | uniq -c` 里某个节点 ≥ 2，说明 `kill_all.sh` 没跑、
-> 或者上次没用 `launch_safe.sh` 留了孤儿。先 `bash scripts/kill_all.sh` 再重启。
+> If any node appears ≥ 2 times in `ros2 node list | uniq -c`, `kill_all.sh` was not run
+> or the previous run left orphans without `launch_safe.sh`. Run `bash scripts/kill_all.sh`
+> first, then restart.
 
-**_legacy 单阶段 Day 8（target_class 驱动 + FSM EXPLORE）** 仍可用：
+**Legacy single-phase Day 8 (target_class-driven + FSM EXPLORE) is still available**:
 
 ```bash
 ros2 launch go2_bringup_sim day8.launch.py target_class:=chair
@@ -172,231 +175,219 @@ cd /home/yiyuchenhu/Desktop/2026spring/2026spring/CINQ389/GO2/GO2-semantic-navig
 bash scripts/run_rviz.sh
 ```
 
-脚本会为 RViz 打开 `use_sim_time:=true`（见 `scripts/run_rviz.sh` 约 L35–48），避免 sim time 与 RViz 默认 wall time 不一致。
+The script enables `use_sim_time:=true` for RViz (see `scripts/run_rviz.sh` ~L35–48) to avoid discrepancies between sim time and RViz's default wall clock.
 
-**Semantic memory — RViz Marker 话题**（`semantic_memory_aggregator`）：
+**Semantic memory — RViz Marker topics** (`semantic_memory_aggregator`):
 
-| Topic | 含义 |
+| Topic | Description |
 | --- | --- |
-| `/semantic_map/markers` | 全部 **confirmed** landmark（visible + remembered），**旧版合并 topic**，兼容老配置 |
-| `/semantic_map/markers_visible` | **confirmed** 且 `currently_visible=true` |
-| `/semantic_map/markers_remembered` | **confirmed** 且 `currently_visible=false` |
-| `/semantic_map/debug_markers` | candidate、invalid、缺 anchor 的 confirmed 等调试流 |
+| `/semantic_map/markers` | All **confirmed** landmarks (visible + remembered); **legacy combined topic**, backward-compatible |
+| `/semantic_map/markers_visible` | **Confirmed** landmarks with `currently_visible=true` |
+| `/semantic_map/markers_remembered` | **Confirmed** landmarks with `currently_visible=false` |
+| `/semantic_map/debug_markers` | Debug stream: candidates, invalid rejects, anchor-missing confirmed entries, etc. |
 
-参数（默认开启拆分）：`publish_split_visibility_markers`（默认 True）、`visible_markers_topic`、`remembered_markers_topic`。若为 False，仅发布 `/semantic_map/markers`，不发布两个拆分 topic。
+Parameters (split publishing enabled by default): `publish_split_visibility_markers` (default True), `visible_markers_topic`, `remembered_markers_topic`. When False, only `/semantic_map/markers` is published; the two split topics are not published.
 
-**Demo 建议**：
+**Demo Recommendations**:
 
-- 录制「记住 table/person」：RViz 只开 **`/semantic_map/markers_remembered`**。
-- 调试实时感知：开 **`/semantic_map/markers_visible`** + **`/semantic_map/debug_markers`**。
-- 全量调试：可同时开四个；**`go2_semantic_nav.rviz`** 中 legacy 合并层默认关，拆分 **visible / remembered** 默认开。
-
-**Semantic memory marker topics (English)**：
-
-- **`/semantic_map/markers`** — all **confirmed** landmarks (visible + remembered), legacy combined topic.
-- **`/semantic_map/markers_visible`** — confirmed landmarks currently **in view** (`currently_visible=true`).
-- **`/semantic_map/markers_remembered`** — confirmed landmarks **remembered but not currently visible**.
-- **`/semantic_map/debug_markers`** — candidates, invalid rejects, anchor-missing confirmed, etc.
-
-**Demo tips**：
-
-- Recording “semantic map memory” — show only **`/semantic_map/markers_remembered`**.
-- Debugging live perception — **`/semantic_map/markers_visible`** + **`/semantic_map/debug_markers`**.
-- Full stack — enable all topics as needed (`go2_semantic_nav.rviz` defaults: split layers on, legacy combined off).
+- Recording "remembered table/person": enable only **`/semantic_map/markers_remembered`** in RViz.
+- Debugging live perception: enable **`/semantic_map/markers_visible`** + **`/semantic_map/debug_markers`**.
+- Full debug: all four topics can be enabled simultaneously; in **`go2_semantic_nav.rviz`**, the legacy combined layer is off by default, and the split **visible / remembered** layers are on by default.
 
 ---
 
-## C. 端到端 Demo 测试流程
+## C. End-to-End Demo Test Procedure
 
-### 模式 1 — Sanity Check（spawn 附近能看见桌子；椅子可能需_exploration）
+### Mode 1 — Sanity Check (table visible near spawn; chair may require exploration)
 
-默认仓库布局下桌子更可能在初始相机视野内；**请以 RViz `/semantic_map/objects` 为准**。
+In the default warehouse layout, the table is more likely to be within the initial camera field of view; **verify against RViz `/semantic_map/objects`**.
 
-⚠️ **必须等 `/mapping/status` 持续输出 `DONE` 后才能发 NL 命令**——`mapping_explorer` 和 `task_coordinator` 都持有 Nav2 ActionClient，双客户端会抢 `/navigate_to_pose` action server。
+⚠️ **NL commands must not be sent until `/mapping/status` consistently outputs `DONE`** — both `mapping_explorer` and `task_coordinator` hold Nav2 ActionClients, and concurrent clients will contend for the `/navigate_to_pose` action server.
 
-**命令序列**：完成 **T1→T5** 后：
+**Command sequence**: after completing **T1→T5**:
 
 ```bash
-# Phase A：观察 mapping 状态（latched 字符串）
+# Phase A: observe mapping status (latched string)
 ros2 topic echo /mapping/status --once
 
-# Phase B：自然语言（示例）
+# Phase B: natural language command (example)
 ros2 topic pub --once /user_command std_msgs/msg/String "data: 'go to chair'"
 ```
 
-**RViz 期望现象**：
+**Expected behavior in RViz**:
 
-- `/map` 扩张、`Frontiers`（若配置启用）与语义 Marker 逐渐出现；
-- `semantic_map` 实体列表中**出现目标类**（如 `chair`/`table`，以检测为准）。
+- `/map` expands; Frontiers (if configured) and semantic Markers gradually appear.
+- The target class (e.g., `chair`/`table`, per detection) appears in the `semantic_map` entity list.
 
-**`/task/status`（`std_msgs/String`）**：成功路径典型片段为  
+**`/task/status` (`std_msgs/String`)**: the typical status path on success is  
 `... → CHECK_MEMORY → TARGET_FOUND → PLAN_APPROACH_GOAL → NAVIGATE_TO_GOAL → VERIFY_TARGET → ARRIVED`  
-（定义见 `task_coordinator_node.py` 状态枚举约 L62–79）。
+(defined in `task_coordinator_node.py` state enum ~L62–79).
 
-**ARRIVED 判定**：
+**ARRIVED Determination**:
 
-- `ros2 topic echo /task/status --once` 含 `ARRIVED`；
-- 机器人停在目标附近且语义上合理（结合 RViz 机器人与 entity marker）。
+- `ros2 topic echo /task/status --once` contains `ARRIVED`;
+- the robot has stopped near the target with a semantically valid position (confirmed via RViz robot pose and entity marker).
 
 ---
 
-### 模式 2 — 「真」语义导航（物体先在视野外）
+### Mode 2 — "True" Semantic Navigation (object initially out of view)
 
-#### 调整椅子位置
+#### Adjusting the Chair Position
 
-编辑 `sim/warehouse_scene.py`：
+Edit `sim/warehouse_scene.py`:
 
-- **位置常量**：`CHAIR_XYZ = (3.5, -3.5, 0.0)`（约 **L101**）
-- 按需改成更远或转角后方；保存后 **重启 Isaac Sim** 使场景重建生效。
+- **Position constant**: `CHAIR_XYZ = (3.5, -3.5, 0.0)` (approximately **L101**)
+- Change to a more distant or occluded position as needed; save and **restart Isaac Sim** for the scene to be rebuilt.
 
-#### 重启栈
+#### Restart the Stack
 
-按 **A.2** 清理后重新执行 **T1→T5**。
+Clean up as in **A.2** and re-run **T1→T5**.
 
-#### 测试命令
+#### Test Command
 
-仍建议 Phase A 跑完后发：
+Still recommended to send after Phase A completes:
 
 ```bash
 ros2 topic pub --once /user_command std_msgs/msg/String "data: 'go to chair'"
 ```
 
-#### 关于「抢占 mapping_explorer」的说明（务必读）
+#### Note on Preempting `mapping_explorer` (must read)
 
-**当前 `day8_two_phase.launch.py` 没有在代码层实现**：「`mapping_explorer` 正在 NAVIGATING 时，一旦 `semantic_memory` 出现 chair 就自动停掉 Phase A 并切换 Approach」。  
-可靠演示路径是：
+**The current `day8_two_phase.launch.py` does not implement at the code level**: automatically stopping Phase A and switching to Approach as soon as `chair` appears in `semantic_memory`.  
+The reliable demo path is:
 
-1. 等待 **`/mapping/status` 为 `DONE`**（或 operator 发送 `/mapping/control`，字符串 `abort`/`restart` 语义见 `mapping_explorer_node.py` 约 L276–301）；  
-2. 再发 `/user_command`。
+1. Wait until **`/mapping/status` is `DONE`** (or the operator sends `/mapping/control` with `abort`/`restart` — see `mapping_explorer_node.py` ~L276–301 for semantics);  
+2. Then send `/user_command`.
 
-若必须在记忆中尚无实体时导航：`nl_parser` 发出的 `SemanticTask.requires_search` 为 **True**（`nl_parser_node.py` L353），可能触发 `task_coordinator` 的 **EXPLORE**，与 `mapping_explorer` **同时占用 Nav2**——不推荐作为正式 demo 路径。
+If navigation must proceed when no entity exists in memory yet: `nl_parser` emits `SemanticTask.requires_search = True` (`nl_parser_node.py` L353), which may trigger the **EXPLORE** state in `task_coordinator`, simultaneously contending with `mapping_explorer` for Nav2 — **not recommended as a formal demo path**.
 
-**若你要复现「单一 FSM 下边探索边找椅子」叙事**：改用 **`day8.launch.py target_class:=chair`**（`task_coordinator` 内置 EXPLORE），而非两阶段并行。
+**If you want to reproduce the "single FSM exploring while searching for chair" scenario**: use **`day8.launch.py target_class:=chair`** (`task_coordinator` has built-in EXPLORE) rather than the two-phase parallel approach.
 
 ---
 
-### 模式 3 — 失败场景（不存在实例的类别）
+### Mode 3 — Failure Scenario (class with no existing instance)
 
-默认 **`day8_two_phase.launch.py` 的 `nl_known_classes` 不含 microwave**（约 L255–261）。要做「解析出 microwave → 再失败」需覆盖参数，例如：
+By default, **`nl_known_classes` in `day8_two_phase.launch.py` does not include `microwave`** (~L255–261). To trigger "parse microwave → then fail", override the parameter:
 
 ```bash
 ros2 launch go2_bringup_sim day8_two_phase.launch.py \
   nl_known_classes:='chair,table,desk,box,microwave'
 ```
 
-否则 NL 层会拒绝识别 `microwave`，而不是触发 `task_coordinator` 的 `FAILED` 状态。
+Otherwise the NL layer will reject `microwave` outright, instead of triggering the `FAILED` state in `task_coordinator`.
 
-然后：
+Then:
 
 ```bash
 ros2 topic pub --once /user_command std_msgs/msg/String "data: 'go to microwave'"
 ```
 
-**期望 `/task/status`**：在记忆中找不到实例时会进入 **`EXPLORE`**（若 frontier 最终为空）并由 coordinator 失败处理；典型失败串包含 **`environment fully explored`** 与 **`microwave`**（见 `task_coordinator_node.py` L533–537）。
+**Expected `/task/status`**: when no instance is found in memory, enters **`EXPLORE`** (if the frontier is eventually exhausted) and is handled as a failure by the coordinator; the typical failure string contains **`environment fully explored`** and **`microwave`** (see `task_coordinator_node.py` L533–537).
 
-> 若 **未** 把 `microwave` 加进 `nl_known_classes`，则可能只在 **`/nl_parser/feedback`** 看到低置信/拒绝提示，`task_coordinator` 仍在 **IDLE** —— 这也是一种「失败」，但是 **NL 层拒绝**而非导航 FSM 失败。
+> If `microwave` is **not** added to `nl_known_classes`, you may see only a low-confidence/rejection message in **`/nl_parser/feedback`**, with `task_coordinator` remaining in **IDLE** — this is also a form of "failure", but it is an **NL-layer rejection** rather than a navigation FSM failure.
 
 ---
 
-### 模式 4 — Phase A 没扫到目标？主动绕墙巡检（不重启栈）
+### Mode 4 — Target Not Found During Phase A? Run a Perimeter Patrol (No Stack Restart Required)
 
-`mapping_explorer` 的 frontier 评分倾向"未知空间最大化"，所以经常机器人停在屋子中央就 `DONE`，YOLOE 没机会扫到贴墙的物体。这时不必重启整套栈，可以临时让 Go2 沿墙绕一圈，让 YOLOE 把 chair / table / box 扫进 `semantic_memory_aggregator`。
+`mapping_explorer`'s frontier scoring favors "maximum unknown space", so the robot often stops at the center of the room and transitions to `DONE` before YOLOE has had a chance to scan objects near walls. There is no need to restart the full stack in this case — temporarily drive Go2 in a perimeter loop so that YOLOE can scan chair/table/box into `semantic_memory_aggregator`.
 
 ```bash
-# 看看默认会走哪几个点（不需要 source ROS）
+# Preview the default waypoints (no ROS source needed)
 python3 scripts/perimeter_patrol.py --dry-run
 
-# 真正派发：CW 顺时针 4 个角落 + 每个角落原地转 360°，约 6–8 分钟
+# Execute: CW 4 corners + 360° in-place spin at each corner, approximately 6–8 minutes
 python3 scripts/perimeter_patrol.py
 
-# 只想去 chair 所在的 SE 角（map(7.5, 0.5)）做一次快测
+# Quick test: go only to the SE corner where the chair is (map(7.5, 0.5))
 python3 scripts/perimeter_patrol.py --se-only
 
-# 8 个 waypoint（角 + 边中点），不在每个点旋转，更快但扫描密度低
+# 8 waypoints (corners + edge midpoints), no spin at each point; faster but lower scan density
 python3 scripts/perimeter_patrol.py --dense --no-spin
 
-# 反方向（CCW），inset 扩大到 2 m 避开膨胀代价
+# Reverse direction (CCW), inset increased to 2 m to avoid inflation cost
 python3 scripts/perimeter_patrol.py --ccw --inset 2.0
 ```
 
-waypoint 计算基于仓库尺寸 10 m × 10 m + `world_to_map` 静态偏置 (-4, -4)，所以 map 帧可走范围约 `x∈[-1,9], y∈[-1,9]`，inset 1.5 m 后角点是 `(0.5,0.5) (7.5,0.5) (7.5,7.5) (0.5,7.5)`。chair 的 map 坐标 `(7.5, 0.5)` 正好就是 SE 角。
+Waypoints are computed from the warehouse dimensions (10 m × 10 m) plus the `world_to_map` static offset (-4, -4), giving a navigable map-frame range of approximately `x∈[-1,9], y∈[-1,9]`. With a 1.5 m inset, the corner waypoints are `(0.5,0.5) (7.5,0.5) (7.5,7.5) (0.5,7.5)`. The chair's map coordinate `(7.5, 0.5)` corresponds exactly to the SE corner.
 
-它直接调 `/navigate_to_pose`，所以**会抢占** `mapping_explorer` / `task_coordinator` 当前的 Nav2 goal——只在 `/mapping/status == DONE` 之后跑（或者在你确实想干预的时候跑）。Ctrl+C 会取消当前 goal、停下机器人。
+This script directly calls `/navigate_to_pose`, so it **preempts** the current Nav2 goal held by `mapping_explorer` or `task_coordinator` — only run after `/mapping/status == DONE` (or when you intentionally want to intervene). Ctrl+C cancels the current goal and stops the robot.
 
-跑完用 `ros2 topic echo /semantic_map/objects --once` 看 chair / table 是否进了 entity 列表，再发 `/user_command "go to chair"`。
+After completion, use `ros2 topic echo /semantic_map/objects --once` to check whether `chair`/`table` appear in the entity list, then send `/user_command "go to chair"`.
 
 ---
 
-## D. 故障排查速查表
+## D. Troubleshooting Quick Reference
 
-| 现象 | 可能原因 | 诊断命令 |
+| Symptom | Possible Cause | Diagnostic Command |
 |------|----------|----------|
-| `/mapping/status` 长期非 DONE | frontier 不绝、Nav2 反复 ABORT、TF 未就绪 | `ros2 topic echo /mapping/status --once`；看 mapping_explorer 日志；`ros2 topic echo /tf_static --once` |
-| DONE 但 `/semantic_map/objects` 空 | 机器人从未观测到物体；YOLOE 未运行或类别不匹配 | `ros2 topic echo /semantic_map/objects --once`；`ros2 topic hz /detections` |
-| 发 NL 后 coordinator 无反应 | `nl_parser` 置信度不足；或 `/semantic_task/request` 无订阅 | `ros2 topic echo /nl_parser/feedback --once`；`ros2 topic info /semantic_task/request` |
-| 导航中途 ABORTED | sim TF 滞后、代价地图、目标在障碍内 | Nav2 日志；`ros2 topic echo /task/status --once` |
-| `/global_costmap/costmap` 异常空 | QoS/生命周期、上游 `/map` 或 SLAM 未起 | `ros2 topic info -v /global_costmap/costmap`；`ros2 topic hz /map` |
-| `/scan` 频率异常 | pointcloud_to_laserscan 断流、TF 问题、重复节点 | `ros2 topic hz /scan`；`ros2 node list \| sort \| uniq -d` |
+| `/mapping/status` does not reach DONE | Frontiers never exhausted, Nav2 repeatedly ABORTs, TF not ready | `ros2 topic echo /mapping/status --once`; check mapping_explorer logs; `ros2 topic echo /tf_static --once` |
+| DONE but `/semantic_map/objects` is empty | Robot never observed any object; YOLOE not running or class mismatch | `ros2 topic echo /semantic_map/objects --once`; `ros2 topic hz /detections` |
+| Coordinator unresponsive after NL command | `nl_parser` confidence too low; or no subscriber on `/semantic_task/request` | `ros2 topic echo /nl_parser/feedback --once`; `ros2 topic info /semantic_task/request` |
+| Navigation ABORTED mid-route | Sim TF lag, costmap issue, goal inside obstacle | Nav2 logs; `ros2 topic echo /task/status --once` |
+| `/global_costmap/costmap` abnormally empty | QoS/lifecycle issue, upstream `/map` or SLAM not running | `ros2 topic info -v /global_costmap/costmap`; `ros2 topic hz /map` |
+| `/scan` rate anomaly | `pointcloud_to_laserscan` stream dropped, TF issue, duplicate nodes | `ros2 topic hz /scan`; `ros2 node list \| sort \| uniq -d` |
 
 ---
 
-## E. 关键 `ros2` 命令速查
+## E. Key `ros2` Command Reference
 
 ```bash
-# 实体列表
+# Entity list
 ros2 topic echo /semantic_map/objects --once
 
-# 检测频率
+# Detection rate
 ros2 topic hz /detections
 
-# Mapping explorer 常用参数（名称以节点声明为准）
+# Mapping explorer key parameters (names match node declarations)
 ros2 param describe /mapping_explorer
 ros2 param set /mapping_explorer max_consecutive_aborts 8
 ros2 param set /mapping_explorer done_confirm_sec 8.0
 ros2 param set /mapping_explorer done_fast true
-# 缩短"思考时间"——每次 Nav2 ABORT 后该 frontier 的软冷却（默认 15 s）。
-# 调到 5–10 s 可让 Go2 几乎立刻重试，但要小心 Nav2 真不可达时会更频繁打日志。
+# Shorten "thinking time" — soft cooldown per frontier after Nav2 ABORT (default 15 s).
+# Setting to 5–10 s lets Go2 retry almost immediately, but be aware that logging frequency
+# increases when Nav2 truly cannot reach a goal.
 ros2 param set /mapping_explorer abort_cooldown_sec 10.0
 
-# 取消当前导航目标（取消 action server 上活跃 goal）
+# Cancel the current navigation goal (cancel the active goal on the action server)
 ros2 action cancel /navigate_to_pose
 
-# 键盘遥控（如需）
+# Keyboard teleoperation (if needed)
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
-# 强制停止 Phase A（映射 explorer）
+# Force-stop Phase A (mapping explorer)
 ros2 topic pub --once /mapping/control std_msgs/msg/String "data: 'abort'"
 
-# 主动巡检 / 找物体（绕墙一圈，不需要重启栈）
-python3 scripts/perimeter_patrol.py --dry-run     # 看一眼计划
-python3 scripts/perimeter_patrol.py               # 走起
-python3 scripts/perimeter_patrol.py --se-only     # 只去 chair 所在的 SE 角
+# Perimeter patrol / object scan (loop around walls, no stack restart needed)
+python3 scripts/perimeter_patrol.py --dry-run     # Preview the plan
+python3 scripts/perimeter_patrol.py               # Start patrol
+python3 scripts/perimeter_patrol.py --se-only     # Go only to the SE corner (where the chair is)
 ```
 
 ---
 
-## F. 录 Demo 视频（OBS Studio）
+## F. Recording a Demo Video (OBS Studio)
 
-Linux 常见启动方式（取决于安装来源）：
+Common Linux launch methods (depends on installation source):
 
 ```bash
 obs
-# 或
+# or
 flatpak run com.obsproject.Studio
 ```
 
-**建议录制内容**：
+**Recommended recording content**:
 
-1. Isaac Sim 视窗（机器人运动与环境）。  
-2. RViz（`/map`、语义 markers、可选 frontiers）。  
-3. 终端：`/mapping/status` echo、`/user_command` pub、`/task/status` echo。
+1. Isaac Sim viewport (robot motion and environment).  
+2. RViz (`/map`, semantic markers, optional frontiers).  
+3. Terminal: `/mapping/status` echo, `/user_command` pub, `/task/status` echo.
 
-**布局**：1080p 单屏可采用「左上 Sim + 右 RViz + 底部长终端」；双屏可将 Sim 与 RViz 分屏。
+**Layout**: on a 1080p single monitor, use "Sim top-left + RViz right + terminal strip at bottom"; on a dual-monitor setup, Sim and RViz can be shown on separate screens.
 
 ---
 
-## 附：仓库内相关 Launch 文件索引（已核对存在）
+## Appendix: Launch File Index in Repository (existence verified)
 
-`chair_execute_goal.launch.py`、`chair_perception.launch.py`、`chair_goto_goal.launch.py`、`chair_semantic_memory.launch.py`、`chair_with_search.launch.py`、`day6.launch.py`、`day7.launch.py`、`day8.launch.py`、`day8_two_phase.launch.py`、`mapping.launch.py`、`nav2.launch.py`、`sim_semantic_nav.launch.py`、`tf_and_scan.launch.py`、`yoloe.launch.py`
+`chair_execute_goal.launch.py`, `chair_perception.launch.py`, `chair_goto_goal.launch.py`, `chair_semantic_memory.launch.py`, `chair_with_search.launch.py`, `day6.launch.py`, `day7.launch.py`, `day8.launch.py`, `day8_two_phase.launch.py`, `mapping.launch.py`, `nav2.launch.py`, `sim_semantic_nav.launch.py`, `tf_and_scan.launch.py`, `yoloe.launch.py`
 
-路径：`src/go2_bringup_sim/launch/`
+Path: `src/go2_bringup_sim/launch/`

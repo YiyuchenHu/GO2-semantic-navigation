@@ -164,10 +164,10 @@ if [ "${_FAIL}" -gt 0 ]; then
 fi
 
 echo
-echo "  ${C_BLD}Day 6.5 gate #1 提示:${C_END} 脚本里的 GT 桌子坐标在 **odom** 系 (~${_GT_X}, ${_GT_Y}) m。"
-echo "  请用  target_frame:=odom  启动 day7（否则与 map 下的 pose 比会误判）。"
-echo "  建议  target_class:=desk ，并让机器人**朝向仓库桌子**以便语义图里有 desk/table。"
-echo "  仿真里 depth_projector 请保持  tf_fallback_latest_on_time_error:=true （默认），否则 TF 外推会丢检测。"
+echo "  ${C_BLD}Day 6.5 gate #1 note:${C_END} The GT table coordinates in this script are in the **odom** frame (~${_GT_X}, ${_GT_Y}) m."
+echo "  Launch day7 with  target_frame:=odom  (otherwise comparison with poses in the map frame will be incorrect)."
+echo "  Recommended: set  target_class:=desk  and ensure the robot is facing the warehouse table so that desk/table appears in the semantic map."
+echo "  In simulation, keep  tf_fallback_latest_on_time_error:=true  for depth_projector (this is the default); otherwise TF extrapolation will cause dropped detections."
 echo
 
 # ----------------------------------------------------------------------------
