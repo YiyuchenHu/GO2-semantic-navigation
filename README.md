@@ -38,6 +38,10 @@ A simulation-first semantic navigation stack for the Unitree Go2, built on Isaac
 ## Pre-flight setup (run once)
 
 ```bash
+# 0. Clone and enter the project root
+git clone https://github.com/YiyuchenHu/GO2-semantic-navigation.git
+cd GO2-semantic-navigation
+
 # 1. ROS 2 dependencies
 sudo apt update && sudo apt install -y \
   ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
@@ -110,8 +114,6 @@ IDLE → PARSE_COMMAND → CHECK_MEMORY → TARGET_NOT_FOUND
      → EXPLORE → ... → TARGET_FOUND → PLAN_APPROACH_GOAL
      → NAVIGATE_TO_GOAL → ARRIVED
 ```
-
-For the full runbook including troubleshooting, see [`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md).
 
 ---
 
@@ -220,7 +222,7 @@ The Unitree Go2 platform is particularly well-suited to these directions: a legg
 
 ## Documentation
 
-- [`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md) — full step-by-step runbook
+- [`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md) — legacy runbook (deprecated, kept for reference only)
 - [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — development notes
 
 ---

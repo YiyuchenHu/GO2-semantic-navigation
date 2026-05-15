@@ -1,3 +1,19 @@
+> ⚠️ **DEPRECATED — Legacy runbook**
+>
+> This document describes the older `day8_two_phase.launch.py` five-terminal flow,
+> which has been superseded by the single-launch `command_first_demo.launch.py`
+> workflow documented in the main [README](../README.md).
+>
+> The legacy flow had a known issue: `mapping_explorer_node` and `task_coordinator_node`
+> both held a NavigateToPose action client, causing Nav2 contention. The new
+> command-first flow eliminates this by having `task_coordinator` own the
+> exploration loop directly via its EXPLORE state.
+>
+> This document is kept only for historical reference. **New users should follow
+> the README's Quick Start.**
+
+---
+
 # Go2 Semantic Navigation — End-to-End Operations Manual
 
 > A reference for your future self (coming back a few weeks later): the commands below are **ready to copy-paste**; launch file names have been **statically verified** against `src/go2_bringup_sim/launch/` in this repository.  
