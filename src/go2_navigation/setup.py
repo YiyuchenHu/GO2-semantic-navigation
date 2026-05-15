@@ -26,6 +26,7 @@ setup(
             "arrival_verifier_node = go2_navigation.arrival_verifier_node:main",
             "frontier_explorer_node = go2_navigation.frontier_explorer_node:main",
             "mapping_explorer_node = go2_navigation.mapping_explorer_node:main",
+            "social_obstacle_publisher = go2_navigation.social_obstacle_publisher:main",
         ],
     },
 )

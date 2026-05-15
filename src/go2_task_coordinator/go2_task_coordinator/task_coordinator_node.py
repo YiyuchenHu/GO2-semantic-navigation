@@ -264,6 +264,17 @@ class TaskCoordinatorNode(Node):
         # against tf_startup_grace_sec drives the WAITING_FOR_TF →
         # FAILED transition.
         self._tf_first_missing_ns: Optional[int] = None
+        # ---- /map readiness state (Patch A — wall-clock grace) -------
+        # Mirror of `_tf_first_missing_ns` but for the GetFrontiers
+        # service returning success=False (no map yet). The legacy
+        # tick-counter (`_explore_no_map_retries`) capped at
+        # ~1.2 s of grace which is not enough for slam_toolbox cold
+        # boot under Isaac Sim (5-15 s before the first /map). We
+        # reuse the same `tf_startup_grace_sec` parameter so the
+        # operator only has one knob to tune for "SLAM startup".
+        # `_explore_no_map_retries` is intentionally KEPT IN SYNC for
+        # heartbeat / debug visibility, but no longer drives FAILED.
+        self._map_first_missing_ns: Optional[int] = None
         # Throttle for the WAITING_FOR_TF log line.
         self._tf_last_status_log_ns: int = 0
         # When set, _publish_controls overrides /task/status with
@@ -356,6 +367,21 @@ class TaskCoordinatorNode(Node):
         self._task_status_pub = self.create_publisher(
             String, "/task/status", 10
         )
+        # /task_coordinator/state — TRANSIENT_LOCAL latched FSM state
+        # for RViz overlays and late-attached observers. Payload is the
+        # raw FsmState enum name ("IDLE" / "EXPLORE" / ...). Published
+        # on every _set_state() transition; subscribers that join after
+        # the transition still see the current state immediately
+        # because of the latched durability.
+        fsm_state_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+        )
+        self._fsm_state_pub = self.create_publisher(
+            String, "/task_coordinator/state", fsm_state_qos
+        )
         dbg_qos = QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -414,6 +440,15 @@ class TaskCoordinatorNode(Node):
                 f"{remote_node!r}: {type(exc).__name__}: {exc}; "
                 f"target_class sync disabled"
             )
+
+        # Seed the latched FSM state topic with the boot value so
+        # late-attached subscribers (RViz overlays, e2e probes)
+        # always see at least one message even before the first
+        # /user_command arrives.
+        try:
+            self._fsm_state_pub.publish(String(data=self._state.value))
+        except Exception:
+            pass
 
         self.create_timer(tick_period, self._tick)
         self.get_logger().info(
@@ -662,13 +697,29 @@ class TaskCoordinatorNode(Node):
             return
 
         if not self._frontier_client.service_is_ready():
-            # Bounded wait for the service to come up.
+            # Patch A — same wall-clock grace as the !success path.
+            # frontier_explorer is part of the mapping subsystem; we
+            # treat "service not yet advertised" the same way as
+            # "service answered but no /map yet". Counter is still
+            # incremented for heartbeat visibility, but no longer
+            # fires FAILED on its own.
+            now_ns = self.get_clock().now().nanoseconds
             self._explore_no_map_retries += 1
-            if self._explore_no_map_retries > _EXPLORE_PRECONDITION_RETRIES:
+            first_activation = self._map_first_missing_ns is None
+            if first_activation:
+                self._map_first_missing_ns = now_ns
+                self.get_logger().info(
+                    f"EXPLORE: waiting for SLAM map "
+                    f"(grace={self._tf_startup_grace_sec:.0f}s) — "
+                    f"{self._get_frontiers_service!r} not yet "
+                    f"advertised"
+                )
+            elapsed_sec = (now_ns - self._map_first_missing_ns) / 1e9
+            if elapsed_sec > self._tf_startup_grace_sec:
                 self._fail(
                     f"EXPLORE: {self._get_frontiers_service!r} not "
-                    f"available after "
-                    f"{_EXPLORE_PRECONDITION_RETRIES} ticks"
+                    f"available after {elapsed_sec:.1f}s "
+                    f"(grace={self._tf_startup_grace_sec:.0f}s)"
                 )
             return
 
@@ -747,22 +798,43 @@ class TaskCoordinatorNode(Node):
         self._frontier_future = None
 
         if not resp.success:
+            # Patch A — wall-clock grace (mirrors TF readiness path).
+            # Replaces the legacy 6-tick (~1.2s) counter that timed
+            # out long before slam_toolbox publishes its first /map
+            # on a cold Isaac Sim boot. Reuse the SAME
+            # `tf_startup_grace_sec` budget so "SLAM startup grace"
+            # is one operator knob, not two.
+            now_ns = self.get_clock().now().nanoseconds
             self._explore_no_map_retries += 1
+            first_activation = self._map_first_missing_ns is None
+            if first_activation:
+                self._map_first_missing_ns = now_ns
+                self.get_logger().info(
+                    f"EXPLORE: waiting for SLAM map "
+                    f"(grace={self._tf_startup_grace_sec:.0f}s) — "
+                    f"GetFrontiers !success: {resp.message}"
+                )
+            elapsed_sec = (now_ns - self._map_first_missing_ns) / 1e9
             self.get_logger().warn(
-                f"GetFrontiers !success ({resp.message}); retry "
-                f"{self._explore_no_map_retries}/"
-                f"{_EXPLORE_PRECONDITION_RETRIES}"
+                f"GetFrontiers !success ({resp.message}); waiting "
+                f"for /map (elapsed={elapsed_sec:.1f}s/"
+                f"{self._tf_startup_grace_sec:.0f}s, retries="
+                f"{self._explore_no_map_retries})",
+                throttle_duration_sec=2.0,
             )
-            if self._explore_no_map_retries > _EXPLORE_PRECONDITION_RETRIES:
+            if elapsed_sec > self._tf_startup_grace_sec:
                 self._fail(
-                    f"EXPLORE: GetFrontiers !success "
-                    f"{_EXPLORE_PRECONDITION_RETRIES + 1}x — {resp.message}"
+                    f"EXPLORE: GetFrontiers !success for "
+                    f"{elapsed_sec:.1f}s (grace="
+                    f"{self._tf_startup_grace_sec:.0f}s exceeded) — "
+                    f"{resp.message}"
                 )
             # Else: the next _tick will re-attempt.
             return
 
-        # Reset map-retry counter on a clean response.
+        # Map ready — clear grace state on a clean response.
         self._explore_no_map_retries = 0
+        self._map_first_missing_ns = None
 
         if not resp.frontier_goals:
             target_cls = self._effective_target_class() or "<unknown>"
@@ -902,12 +974,26 @@ class TaskCoordinatorNode(Node):
         self._state = new_state
         self._state_enter_ns = self.get_clock().now().nanoseconds
         self.get_logger().info(f"FSM {old.value} -> {new_state.value}")
+        # Latched state publish for RViz overlays / external monitors.
+        # Best-effort: never let a publish failure derail the FSM.
+        try:
+            self._fsm_state_pub.publish(String(data=new_state.value))
+        except Exception as exc:
+            self.get_logger().warn(
+                f"/task_coordinator/state publish failed: "
+                f"{type(exc).__name__}: {exc}",
+                throttle_duration_sec=5.0,
+            )
 
         # Reset EXPLORE bookkeeping on entry — last run's state is stale.
         if new_state == FsmState.EXPLORE:
             self._explore_consecutive_aborts = 0
             self._explore_pose_retries = 0
             self._explore_no_map_retries = 0
+            # Patch A — fresh grace window every time we re-enter
+            # EXPLORE. Without this, a previous task that exhausted
+            # the map-grace budget would poison the next one.
+            self._map_first_missing_ns = None
             self._failure_reason = None
 
         # Leaving EXPLORE without a cancel (e.g. natural transition)

@@ -122,14 +122,31 @@ GO2_SPAWN_YAW_DEG = 45.0
 #   person = ( 2.5, -1.0)
 #   sqrt(25 + 9) ≈ 5.83 m  →  ≥ 4.0 m as the spec requires.
 TABLE_XYZ = (-2.5, 2.0, 0.0)
-# Kept as a constant so chair_*.launch.py + legacy tests still resolve
-# the symbol; build_full_warehouse no longer places a chair by default.
-CHAIR_XYZ = (3.5, -3.5, 0.0)
+# command_first_demo (May 2026) — chair is the navigation target,
+# placed in the NE quadrant so the path from Go2 spawn (-4,-4) crosses
+# the warehouse diagonally. With ENCLOSED_ROOM=True the only way to
+# reach it is through the central area, where the second person
+# (PERSON2_XYZ) sits and forces the social-aware planner to bend the
+# path. Override here only if the demo geometry changes — legacy
+# chair_*.launch.py just calls build_chair() and trusts this constant.
+# Placed 4m from Go2 spawn (-4,-4) in clear line-of-sight,
+# with persons still between spawn and chair to preserve
+# the social-aware avoidance demonstration.
+CHAIR_XYZ = (-1.0, -2.5, 0.0)
 # Day 8+ MVP target — a person USD inside Go2 spawn-pose camera FOV so
 # perception lights it up immediately. Pulled away from the table to
 # ensure nav2's costmap inflation around one obstacle never overlaps
 # the other's approach ring.
 PERSON_XYZ = (2.5, -1.0, 0.0)
+# command_first_demo — second person placed directly on the diagonal
+# from Go2 spawn (-4,-4) to chair (-1,-2.5) so the planner has to
+# detour around them. Parametric midpoint at t=0.5 is (-2.5,-3.25);
+# we use (-2.5,-3.0) to stay on the path while keeping a slight offset
+# so the person doesn't overlap the chair's approach ring.
+# NOTE: leg proxy columns are disabled for Person2 (see build_full_warehouse).
+# The social_obstacle_publisher generates /social_obstacles from YOLOE
+# detections, so Nav2's social costmap still inflates around this person.
+PERSON2_XYZ = (-2.5, -3.0, 0.0)
 # Yaw of the person USD. Isaac people USDs face +X by default; rotating
 # 180° turns the silhouette towards the spawn camera so YOLOE sees the
 # canonical COCO-`person` upright frontal pose with helmet + arms
@@ -692,13 +709,18 @@ def build_chair(prim_path: str = "/World/Chair") -> None:
 def build_person(
     prim_path: str = "/World/Person",
     *,
+    xyz: tuple = None,
     add_collision_proxy: bool = True,
     semantic_proxy_visible_to_lidar: bool = True,
 ) -> None:
-    """Spawn the MVP-target person USD inside Go2 spawn-camera FOV.
+    """Spawn an MVP-target person USD at ``xyz`` (defaults to PERSON_XYZ).
 
     Notes
     -----
+    * ``xyz`` is the world-frame placement; ``None`` falls back to the
+      module-level ``PERSON_XYZ`` constant. Pass an explicit tuple to
+      spawn additional persons (e.g. for command_first_demo's halfway-
+      down-the-path actor).
     * The user singled out ``male_adult_construction_05_new.usd``;
       ASSET_CANDIDATES["person"] tries that path first and falls back
       to NVIDIA people-pack defaults that ship in Isaac 4.1+.
@@ -712,12 +734,22 @@ def build_person(
       builder if a perception-only test wants to walk through the
       person without bumping the costmap.
     """
+    if xyz is None:
+        xyz = PERSON_XYZ
     _ensure_parent_xform(prim_path)
     body_path = f"{prim_path}/body"
-    if _try_add_reference(body_path, ASSET_CANDIDATES["person"]):
+    # Fix: record whether the USD reference succeeded so the leg-proxy
+    # loop below can choose the correct coordinate convention.
+    # USD path: _set_pose moves the *parent* prim to xyz, so child
+    #   prims must be in **local** coords (dx, dy) relative to that
+    #   parent — adding xyz again would double-translate them.
+    # Fallback path: the parent stays at origin; world-space
+    #   (xyz[0]+dx, xyz[1]+dy) is still correct.
+    used_ref = _try_add_reference(body_path, ASSET_CANDIDATES["person"])
+    if used_ref:
         _set_pose(body_path, t_xyz=(0.0, 0.0, 0.0), yaw_deg=PERSON_YAW_DEG,
                   scale=PERSON_SCALE)
-        _set_pose(prim_path, t_xyz=PERSON_XYZ, yaw_deg=0.0)
+        _set_pose(prim_path, t_xyz=xyz, yaw_deg=0.0)
         person_label = "Person USD"
     else:
         # Photo-realism fallback. YOLOE will not classify this as
@@ -725,9 +757,9 @@ def build_person(
         # loads and the costmap inflation halo still makes sense.
         FixedCuboid(
             prim_path=body_path,
-            name="person_fallback_body",
+            name=f"{prim_path.rsplit('/', 1)[-1]}_fallback_body",
             position=[
-                PERSON_XYZ[0], PERSON_XYZ[1],
+                xyz[0], xyz[1],
                 PERSON_PROXY_HEIGHT_M / 2.0,
             ],
             scale=[
@@ -768,16 +800,26 @@ def build_person(
         #       False           → UsdGeom.MakeInvisible (legacy mode,
         #                          --invisible-collision-proxies CLI).
         proxy_paths: list[str] = []
+        # Per-instance proxy name prefix so multiple persons don't
+        # collide on the FixedCuboid `name` registry inside Isaac core.
+        person_tag = prim_path.rsplit('/', 1)[-1]
         for i, (dx, dy) in enumerate(PERSON_PROXY_COL_OFFSETS):
             col_path = f"{prim_path}/leg_proxy_{i}"
+            if used_ref:
+                # Parent prim is already at xyz; use local offsets only.
+                proxy_pos = [dx, dy, PERSON_PROXY_COL_HEIGHT_M / 2.0]
+            else:
+                # Fallback path: parent stays at world origin; world
+                # coordinates are correct.
+                proxy_pos = [
+                    xyz[0] + dx,
+                    xyz[1] + dy,
+                    PERSON_PROXY_COL_HEIGHT_M / 2.0,
+                ]
             FixedCuboid(
                 prim_path=col_path,
-                name=f"person_leg_proxy_{i}",
-                position=[
-                    PERSON_XYZ[0] + dx,
-                    PERSON_XYZ[1] + dy,
-                    PERSON_PROXY_COL_HEIGHT_M / 2.0,
-                ],
+                name=f"{person_tag}_leg_proxy_{i}",
+                position=proxy_pos,
                 scale=[
                     PERSON_PROXY_COL_WIDTH_M,
                     PERSON_PROXY_COL_WIDTH_M,
@@ -823,14 +865,17 @@ def build_person(
                 "LiDAR-visible (3-col constellation, dim+translucent)"
             )
         _log(
-            f"{person_label} placed at {PERSON_XYZ} with "
+            f"{person_label} placed at {xyz} ({prim_path}) with "
             f"{len(PERSON_PROXY_COL_OFFSETS)}-column leg proxy "
             f"(each {PERSON_PROXY_COL_WIDTH_M:.2f}m x "
             f"{PERSON_PROXY_COL_HEIGHT_M:.2f}m tall, "
             f"{visibility_note})."
         )
     else:
-        _log(f"{person_label} placed at {PERSON_XYZ} (no collision proxy).")
+        _log(
+            f"{person_label} placed at {xyz} ({prim_path}, "
+            f"no collision proxy)."
+        )
 
 
 def build_full_warehouse(
@@ -868,7 +913,9 @@ def build_full_warehouse(
             ),
         ),
     )
-    # Chair intentionally omitted from the default MVP warehouse.
+    # command_first_demo — chair is the navigation target. Placed at
+    # CHAIR_XYZ=(-1,-2.5), 4m from Go2 spawn in clear line-of-sight.
+    _safe("chair", build_chair)
     _safe(
         "person",
         lambda: build_person(
@@ -876,6 +923,27 @@ def build_full_warehouse(
             semantic_proxy_visible_to_lidar=(
                 semantic_proxy_visible_to_lidar
             ),
+        ),
+    )
+    # Second person on the diagonal between Go2 spawn and the chair.
+    # Provides the social-cost obstacle that forces the planner to
+    # bend the path — the punchline of the command_first_demo
+    # recording. Distinct prim path (`/World/Person2`) so the two
+    # persons coexist in the USD stage without name collisions.
+    #
+    # add_collision_proxy=False: the 3 gray 0.10×0.10×0.80m leg
+    # columns (leg_proxy_0/1/2) that would otherwise appear as
+    # "I-beam pillars" near the warehouse center are suppressed here.
+    # The social_obstacle_publisher node generates /social_obstacles
+    # from YOLOE detections, so Nav2's social costmap still inflates
+    # around Person2 without needing LiDAR-visible leg columns.
+    _safe(
+        "person2",
+        lambda: build_person(
+            prim_path="/World/Person2",
+            xyz=PERSON2_XYZ,
+            add_collision_proxy=False,
+            semantic_proxy_visible_to_lidar=False,
         ),
     )
     _safe("go2", build_go2_spawn)

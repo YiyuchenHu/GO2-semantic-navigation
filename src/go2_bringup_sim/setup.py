@@ -24,6 +24,7 @@ setup(
             "launch/day8.launch.py",
             "launch/day8_two_phase.launch.py",
             "launch/tf_and_scan.launch.py",
+            "launch/command_first_demo.launch.py",
         ]),
         (f"share/{package_name}/config", ["config/sim_interface_contract.yaml"]),
         (f"share/{package_name}/config/slam", [
@@ -32,10 +33,14 @@ setup(
         ]),
         (f"share/{package_name}/config/nav2", [
             "config/nav2/nav2_params.yaml",
+            "config/nav2/nav2_params_social.yaml",
         ]),
         (f"share/{package_name}/rviz", [
             "rviz/go2_semantic_nav.rviz",
             "rviz/go2_motion_debug.rviz",
+        ]),
+        (f"share/{package_name}/config/rviz", [
+            "config/rviz/demo_recording.rviz",
         ]),
         (f"share/{package_name}/urdf", ["urdf/go2_minimal.urdf"]),
     ],

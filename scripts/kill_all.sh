@@ -60,12 +60,18 @@ _PATTERNS=(
 	"tf2_ros/static_transform_publisher"
 	# Nav2 + SLAM
 	"rclcpp_components/component_container_isolated"
+	"rclcpp_components/component_container_mt"     # Nav2 multi-threaded variant (some configs)
+	"rclcpp_components/component_container"        # plain non-isolated variant
 	"slam_toolbox/sync_slam_toolbox"
 	"slam_toolbox/async_slam_toolbox"
+	"async_slam_toolbox_node"                      # explicit node-executable match for slam_toolbox
 	"nav2_lifecycle_manager/lifecycle_manager"
 	"nav2_map_server/map_saver_server"
 	"nav2_map_server/map_server"
 	"nav2_amcl/amcl"
+	# tf_and_scan include — leaks orphans that fight over /scan and URDF /tf
+	"pointcloud_to_laserscan"                      # produces /scan; duplicate breaks SLAM
+	"robot_state_publisher"                        # publishes URDF + base_link TF static
 	# Day-8 pure-Python nodes
 	"go2_navigation/lib/go2_navigation"
 	"go2_perception/lib/go2_perception"

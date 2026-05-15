@@ -16,42 +16,57 @@ if ! command -v rviz2 >/dev/null 2>&1; then
 	exit 1
 fi
 
-# Day 8+ — two presets:
-#   * go2_semantic_nav.rviz : Fixed Frame=world, full semantic stack
-#                              (map, semantic markers, frontier debug,
-#                              costmaps, plans). Use for the demo.
-#   * go2_motion_debug.rviz  : Fixed Frame=odom, light displays
-#                              (RobotModel/TF/LaserScan/PointCloud2/
-#                              optional Image). Use when RobotModel
-#                              feels delayed in the world frame —
-#                              this avoids the 0.55 s map→odom
-#                              post-date that makes Fixed Frame=world
-#                              ghost during heavy SLAM optimisation.
+# Preset selection:
+#   * demo_recording (DEFAULT) — Fixed Frame=map, full social-aware
+#       stack for command-first demo recording: global costmap,
+#       /social_obstacles (red spheres), semantic markers, frontiers,
+#       45° 3/4 perspective centred on the warehouse. This is the
+#       config created for the command_first_demo.launch.py demo.
+#   * semantic_nav  — Fixed Frame=world, original full semantic stack.
+#   * motion_debug  — Fixed Frame=odom, lightweight displays for SLAM
+#       heavy-optimisation debugging.
 #
-# Override which preset by setting RVIZ_PRESET=motion_debug (or the
-# bare filename) before invoking the script.
-_RVIZ_PRESET="${RVIZ_PRESET:-semantic_nav}"
+# Override preset:   RVIZ_PRESET=semantic_nav  ./scripts/run_rviz.sh
+# Override full path: RVIZ_CONFIG=/abs/path/to/my.rviz  ./scripts/run_rviz.sh
+_RVIZ_PRESET="${RVIZ_PRESET:-demo_recording}"
 case "${_RVIZ_PRESET}" in
-	semantic_nav|semantic|"" ) _RVIZ_FILE="go2_semantic_nav.rviz" ;;
-	motion_debug|motion|debug ) _RVIZ_FILE="go2_motion_debug.rviz" ;;
-	*.rviz)                     _RVIZ_FILE="${_RVIZ_PRESET}" ;;
-	*)                          _RVIZ_FILE="${_RVIZ_PRESET}.rviz" ;;
+	demo_recording|demo|recording ) _RVIZ_FILE="demo_recording.rviz" ;;
+	semantic_nav|semantic         ) _RVIZ_FILE="go2_semantic_nav.rviz" ;;
+	motion_debug|motion|debug     ) _RVIZ_FILE="go2_motion_debug.rviz" ;;
+	*.rviz)                         _RVIZ_FILE="${_RVIZ_PRESET}" ;;
+	*)                              _RVIZ_FILE="${_RVIZ_PRESET}.rviz" ;;
 esac
-# Optional configs — only the first *existing* file is used
-_RVIZ_CONFIG_CANDIDATES=(
-	"${PROJECT_ROOT}/config/${_RVIZ_FILE}"
-	"${PROJECT_ROOT}/rviz/${_RVIZ_FILE}"
-	"${PROJECT_ROOT}/go2_bringup_sim/rviz/${_RVIZ_FILE}"
-	"${PROJECT_ROOT}/src/go2_bringup_sim/rviz/${_RVIZ_FILE}"
-)
 
-_CFG=""
-for _f in "${_RVIZ_CONFIG_CANDIDATES[@]}"; do
-	if [ -f "${_f}" ]; then
-		_CFG="${_f}"
-		break
+# Approach B — RVIZ_CONFIG env-var allows a full-path override so the
+# operator can point at any .rviz without touching this script.
+# When unset, resolve via `ros2 pkg prefix` (installed share path)
+# first, then fall back to the source-tree candidates so the script
+# works even before `colcon build`.
+if [ -n "${RVIZ_CONFIG:-}" ]; then
+	_CFG="${RVIZ_CONFIG}"
+else
+	# Installed share path (preferred after colcon build --symlink-install)
+	_INSTALLED_PREFIX=""
+	if command -v ros2 >/dev/null 2>&1; then
+		_INSTALLED_PREFIX="$(ros2 pkg prefix go2_bringup_sim 2>/dev/null || true)"
 	fi
-done
+	_RVIZ_CONFIG_CANDIDATES=(
+		"${_INSTALLED_PREFIX:+${_INSTALLED_PREFIX}/share/go2_bringup_sim/config/rviz/${_RVIZ_FILE}}"
+		"${_INSTALLED_PREFIX:+${_INSTALLED_PREFIX}/share/go2_bringup_sim/rviz/${_RVIZ_FILE}}"
+		"${PROJECT_ROOT}/src/go2_bringup_sim/config/rviz/${_RVIZ_FILE}"
+		"${PROJECT_ROOT}/src/go2_bringup_sim/rviz/${_RVIZ_FILE}"
+		"${PROJECT_ROOT}/config/${_RVIZ_FILE}"
+		"${PROJECT_ROOT}/rviz/${_RVIZ_FILE}"
+	)
+	_CFG=""
+	for _f in "${_RVIZ_CONFIG_CANDIDATES[@]}"; do
+		[ -n "${_f}" ] || continue
+		if [ -f "${_f}" ]; then
+			_CFG="${_f}"
+			break
+		fi
+	done
+fi
 
 # Sim-time alignment. Whole stack (Isaac Sim, slam_toolbox, Nav2,
 # perception nodes) runs with use_sim_time:=true and stamps every
