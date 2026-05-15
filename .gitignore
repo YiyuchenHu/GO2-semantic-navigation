@@ -126,3 +126,8 @@ env/
 .coverage
 htmlcov/
 *.lprof
+
+# Demo media — keep these in repo for README rendering
+!docs/media/
+!docs/media/*.gif
+!docs/media/*.mp4

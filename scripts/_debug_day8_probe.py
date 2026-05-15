@@ -42,9 +42,9 @@ from rclpy.time import Time
 import tf2_ros
 
 
-LOG_PATH = (
-    "/home/yiyuchenhu/Desktop/2026spring/2026spring/CINQ389/"
-    "GO2/GO2-semantic-navigation/.cursor/debug-7f68f3.log"
+DEBUG_LOG_PATH = os.environ.get(
+    "GO2_DEBUG_LOG",
+    os.path.expanduser("~/go2_debug.log"),
 )
 SESSION = "7f68f3"
 
@@ -64,8 +64,8 @@ def emit(location: str, message: str, data: Dict[str, Any],
         "runId": run_id,
         "hypothesisId": hypothesis_id,
     }
-    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-    with open(LOG_PATH, "a", buffering=1) as f:
+    os.makedirs(os.path.dirname(DEBUG_LOG_PATH), exist_ok=True)
+    with open(DEBUG_LOG_PATH, "a", buffering=1) as f:
         f.write(json.dumps(rec) + "\n")
 # endregion
 
@@ -302,7 +302,7 @@ def main() -> int:
     emit(
         "_debug_day8_probe.py:start", "probe started",
         {"run_id": run_id, "duration_s": duration_s,
-         "log_path": LOG_PATH}, "H0", run_id,
+         "log_path": DEBUG_LOG_PATH}, "H0", run_id,
     )
 
     # First snapshot of node graph BEFORE the spin window — we want to

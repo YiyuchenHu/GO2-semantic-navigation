@@ -1,76 +1,183 @@
 # Go2 Semantic Navigation
 
-A simulation-first autonomous semantic navigation system for the Unitree Go2
-quadruped robot, built on Isaac Sim, ROS 2 Jazzy, SLAM Toolbox, Nav2, and
-open-vocabulary perception.  The robot maps an unknown warehouse scene
-autonomously, builds a persistent semantic memory of discovered landmarks
-(person and table), and then navigates to them in response to natural-language
-commands such as `"go to person"` or `"go to table"`.
+> **Open-vocabulary object navigation for the Unitree Go2 quadruped, on Isaac Sim warehouse.**
+> A natural-language command (e.g. `"find chair"`) triggers autonomous frontier exploration, open-vocabulary YOLOE detection, semantic memory accumulation, and goal-directed navigation — all in one FSM.
+
+![Find chair demo](docs/media/demo_find_chair.gif)
+
+*Above: `/user_command "find chair"` → autonomous exploration → YOLOE target detection → FSM transitions `EXPLORE → TARGET_FOUND → NAVIGATE_TO_GOAL → ARRIVED`. Isaac Sim 5.1, real-time (1×).*
+
+📺 [Full demo video (mp4)](docs/media/demo_full.mp4)
 
 ---
 
-## Demo
+## What this is
 
-[Demo 1 — Table and Person Semantic Navigation](PUT_DEMO_LINK_HERE)
+A simulation-first semantic navigation stack for the Unitree Go2, built on Isaac Sim 5.1, ROS 2 Jazzy, SLAM Toolbox, Nav2, and **YOLOE open-vocabulary detection**. The robot:
 
-The demo shows the full pipeline: autonomous SLAM-based frontier exploration,
-YOLOE-based person/table perception, depth-projected PointCloud anchoring,
-semantic memory accumulation, and natural-language goal execution via Nav2.
-
----
-
-## Key Features
-
-- Isaac Sim 5.1 warehouse simulation with Unitree Go2
-- Stable RTX LiDAR setup using `OS1_REV6_32ch10hz512res` profile
-- SLAM Toolbox online mapping + Nav2 stack (ROS 2 Jazzy)
-- Frontier-based autonomous exploration (`mapping_explorer_node`)
-- YOLOE open-vocabulary detection for person and table
-- Depth projection and PointCloud semantic anchoring
-- Semantic memory with visible vs. remembered RViz marker split
-- Natural-language goal commands over `/user_command`
-- Approach goal planner with 16-point ring sampling around targets
-- Nav2 action debug tools and diagnostic scripts
-- Lifecycle recording and semantic health check scripts
+1. Receives a natural-language command on `/user_command` (e.g. `"find chair"`, `"find table"`).
+2. Autonomously explores the unknown warehouse via frontier-based exploration.
+3. Detects target objects with YOLOE — open-vocabulary, so adding a new class requires only extending a string list, no retraining.
+4. Builds a persistent semantic memory of detected landmarks (visible vs. remembered).
+5. Plans an approach goal around the target and navigates there via Nav2 with social-aware costmap inflation.
 
 ---
 
-## System Architecture
+## Environment
+
+| Requirement   | Version / Note                              |
+|---------------|---------------------------------------------|
+| OS            | Ubuntu 24.04                                |
+| ROS 2         | Jazzy                                       |
+| Isaac Sim     | 5.1                                         |
+| GPU           | NVIDIA RTX (tested on RTX 5090)             |
+| Python        | 3.10+                                       |
+
+---
+
+## Pre-flight setup (run once)
+
+```bash
+# 1. ROS 2 dependencies
+sudo apt update && sudo apt install -y \
+  ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
+  ros-jazzy-slam-toolbox ros-jazzy-rviz2 \
+  ros-jazzy-pointcloud-to-laserscan ros-jazzy-topic-tools \
+  ros-jazzy-tf2-geometry-msgs ros-jazzy-vision-msgs \
+  ros-jazzy-cv-bridge
+
+# 2. Python dependencies (YOLOE via ultralytics)
+pip install --user -r requirements.txt
+
+# 3. Pre-fetch YOLOE weights (~600 MB, one-time)
+python3 -c "from ultralytics import YOLOE; YOLOE('yoloe-11s-seg.pt')"
+
+# 4. Build the colcon workspace
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
+
+# 5. Configure local paths
+# Edit scripts/dev_env.sh and set ISAAC_SIM_ROOT to your Isaac Sim install path.
+```
+
+> **Note on the NVIDIA People Pack:** the social-cost halo around the
+> `person` class requires Isaac Sim's optional People Pack assets. The
+> default `find chair` / `find table` demo does **not** depend on this —
+> it is only used when extending the demo to person-aware avoidance.
+
+---
+
+## Quick Start — Command-first demo
+
+Open **three terminals**. In each one, first source the local env:
+
+```bash
+source scripts/dev_env.sh
+```
+
+Then:
+
+```bash
+# T1 — Isaac Sim warehouse (keep running)
+bash scripts/run_warehouse_ros2.sh
+
+# T2 — Full semantic navigation stack
+# (wait until Isaac Sim is fully up and publishing /camera/* and /lidar/points)
+ros2 launch go2_bringup_sim command_first_demo.launch.py
+
+# T3 — RViz
+bash scripts/run_rviz.sh
+```
+
+Wait ~20 seconds for SLAM Toolbox to publish the first `/map`. Then publish a natural-language command:
+
+```bash
+ros2 topic pub --once /user_command std_msgs/msg/String "data: 'find chair'"
+# or:
+ros2 topic pub --once /user_command std_msgs/msg/String "data: 'find table'"
+```
+
+Monitor the FSM:
+
+```bash
+ros2 topic echo /task_coordinator/state
+```
+
+**Expected progression:**
 
 ```
-Isaac Sim (warehouse scene)
-        │  ROS 2 bridge
-        ▼
-  /scan  /odom  /tf  /depth/image_raw  /rgb/image_raw
+IDLE → PARSE_COMMAND → CHECK_MEMORY → TARGET_NOT_FOUND
+     → EXPLORE → ... → TARGET_FOUND → PLAN_APPROACH_GOAL
+     → NAVIGATE_TO_GOAL → ARRIVED
+```
+
+For the full runbook including troubleshooting, see [`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md).
+
+---
+
+## System architecture
+
+```
+Isaac Sim (warehouse) ──► /camera/color, /camera/depth, /lidar/points, /tf, /clock
         │
+        ├──► pointcloud_to_laserscan ──► /scan
         ├──► slam_toolbox ──► /map
         │
-        ├──► Nav2 (RPP controller, costmaps, BT)
+        ├──► YOLOE (open-vocab) ──► /detections
+        │         │
+        │         ▼
+        ├──► depth_projector ──► /detections_3d
+        │         │
+        │         ▼
+        ├──► semantic_memory_aggregator ──► /semantic_map/markers_{visible,remembered}
+        │         │
+        │         ▼
+        ├──► target_selector ──► /semantic_query/selected_target
+        │         │
+        │         ▼
+        ├──► approach_goal_planner ──► /semantic_goal/goal_pose
+        │
+        ├──► frontier_explorer ◄── task_coordinator (EXPLORE state)
+        │
+        ├──► social_obstacle_publisher ──► /social_obstacles (PointCloud2, marking layer)
+        │
+        ├──► Nav2 (RPP controller, social-inflated costmaps)
         │         ▲
-        │         │ NavigateToPose action
+        │         │ NavigateToPose
         │         │
-        ├──► yoloe_detector_node ──► /perception/detections_2d
-        │
-        ├──► depth_projector_node ──► /perception/objects_3d (PointCloud anchors)
-        │
-        ├──► semantic_memory_aggregator_node ──► /semantic_map/entities
-        │         (visible confirmed  → /semantic_map/markers_visible)
-        │         (remembered         → /semantic_map/markers_remembered)
-        │
-        ├──► target_selector_node ──► /semantic_query/selected_target
-        │
-        ├──► approach_goal_planner_node ──► /semantic_goal/goal_pose
-        │
-        ├──► nl_parser_node ◄── /user_command  (natural-language input)
-        │         │
-        │         └──► task_coordinator_node ──► NavigateToPose (Nav2)
-        │
-        └──► mapping_explorer_node ──► frontier goals (during mapping phase)
+        └──► task_coordinator ◄── nl_parser ◄── /user_command
 ```
 
 ---
 
-## Repository Structure
+## Natural-language commands
+
+The `nl_parser` recognises any phrase that resolves to a class in YOLOE's allowlist. Out of the box:
+
+| Input phrase(s)                          | Resolved class  |
+|------------------------------------------|-----------------|
+| `find chair`, `go to chair`              | `chair`         |
+| `find table`, `find desk`, `find workbench` | `table`     |
+| `find person`, `find people`             | `person`        |
+
+**Adding a new target class** requires only extending the `classes` and `nl_known_classes` launch arguments in `command_first_demo.launch.py` — no retraining, no code changes elsewhere.
+
+---
+
+## Key features
+
+- Isaac Sim 5.1 warehouse with RTX LiDAR (`OS1_REV6_32ch10hz512res` profile)
+- SLAM Toolbox online mapping + Nav2 (ROS 2 Jazzy)
+- Single-launch command-first FSM (`command_first_demo.launch.py`)
+- **YOLOE open-vocabulary detection** — chair, table, person, extensible
+- Depth projection + PointCloud-anchored semantic memory
+- Visible vs. remembered marker split in RViz
+- Approach goal planner with 16-point ring sampling around targets
+- Social-aware Nav2 costmap (0.8 m inflation, `/social_obstacles` marking layer)
+
+---
+
+## Repository layout
 
 ```
 sim/                          Isaac Sim entry point and locomotion backends
@@ -78,161 +185,43 @@ src/
   go2_bringup_sim/            Launch files, Nav2 / SLAM config, RViz, URDF
   go2_semantic_perception/    depth_projector, semantic_memory, target_selector,
                               approach_goal_planner, arrival_verifier
-  go2_navigation/             frontier_explorer_node, mapping_explorer_node
+  go2_navigation/             frontier_explorer, social_obstacle_publisher
   go2_nl_parser/              natural-language command parser
-  go2_task_coordinator/       high-level task coordination node
-  go2_msgs/                   custom message and service definitions
-  go2_perception/             YOLOE detector node
-scripts/                      shell and Python helper/diagnostic scripts
+  go2_task_coordinator/       high-level FSM
+  go2_msgs/                   custom messages and services
+  go2_perception/             YOLOE detector
+scripts/                      shell and Python helpers, diagnostics
 docs/                         runbooks, project status, design notes
-maps/                         pre-saved warehouse maps
-policies/                     locomotion policy weights (not committed)
+  media/                      demo gif and full mp4
 ```
 
 ---
 
-## Environment
+## Known limitations
 
-| Requirement         | Version / Note                        |
-|---------------------|---------------------------------------|
-| OS                  | Ubuntu 24.04 (tested)                 |
-| ROS 2               | Jazzy                                 |
-| Isaac Sim           | 5.1                                   |
-| GPU                 | NVIDIA GPU with RTX support           |
-| Python              | 3.10+ (colcon workspace)              |
-| Local env setup     | `source scripts/dev_env.sh`           |
-
-> Machine-specific paths are kept in `scripts/dev_env.sh` and are not
-> assumed to be reproducible as-is.  Adjust that file for your local
-> Isaac Sim and ROS 2 installation paths.
-
----
-
-## Quick Start — Demo Workflow
-
-Open **five terminals**.  In each one, first run:
-
-```bash
-source scripts/dev_env.sh
-```
-
-Then start the stack in order:
-
-```bash
-# T0 — clean up any leftover processes (optional but recommended)
-bash scripts/kill_all.sh
-
-# T1 — Isaac Sim warehouse simulation
-bash scripts/run_warehouse_ros2.sh
-
-# T2 — TF and scan bridge
-bash scripts/launch_safe.sh go2_bringup_sim tf_and_scan.launch.py
-
-# T3 — SLAM + Nav2
-bash scripts/launch_safe.sh go2_bringup_sim nav2.launch.py slam:=True
-
-# T4 — Day 8 two-phase demo (mapping phase → semantic navigation phase)
-bash scripts/launch_safe.sh go2_bringup_sim day8_two_phase.launch.py
-
-# T5 — RViz
-bash scripts/run_rviz.sh
-```
-
-> **Wait for mapping to finish before sending NL commands.**
-> Monitor `/mapping/status` — when it reports `DONE`, the robot has
-> completed frontier exploration and the semantic navigation phase begins.
-
-For the full runbook including troubleshooting, see
-[`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md).
-
----
-
-## Natural-Language Commands
-
-Send commands over `/user_command` once mapping is complete:
-
-```bash
-ros2 topic pub --once /user_command std_msgs/msg/String "{data: 'go to person'}"
-ros2 topic pub --once /user_command std_msgs/msg/String "{data: 'go to table'}"
-ros2 topic pub --once /user_command std_msgs/msg/String "{data: 'go to desk'}"
-```
-
-**Label canonicalization:**
-
-| Input phrase(s)                          | Resolved target |
-|------------------------------------------|-----------------|
-| `desk`, `workbench`, `dining table`      | `table`         |
-| `human`, `man`, `worker`, `people`       | `person`        |
-
----
-
-## RViz Visualization
-
-| Topic                             | Description                                                |
-|-----------------------------------|------------------------------------------------------------|
-| `/semantic_map/markers_visible`   | Currently visible, confirmed semantic landmarks            |
-| `/semantic_map/markers_remembered`| Remembered landmarks (seen before, not currently visible)  |
-| `/semantic_map/markers`           | Legacy combined marker array                               |
-| `/semantic_map/debug_markers`     | Detection candidates and debug visualization               |
-
-**Recommended demo view:** enable `markers_remembered` + `/map` + robot model
-+ goal pose arrow.  Remembered markers persist across the full exploration
-trajectory and are the primary navigation targets.
-
----
-
-## Important Scripts
-
-| Script                                | Purpose                                         |
-|---------------------------------------|-------------------------------------------------|
-| `scripts/run_warehouse_ros2.sh`       | Launch Isaac Sim warehouse scene                |
-| `scripts/launch_safe.sh`              | Safe wrapper for `ros2 launch` with logging     |
-| `scripts/run_rviz.sh`                 | Start RViz with the semantic navigation config  |
-| `scripts/test_day8_nl_to_goal.sh`     | End-to-end NL→goal smoke test                   |
-| `scripts/debug_nav2_action_chain.sh`  | Diagnose Nav2 action server and BT state        |
-| `scripts/check_table_semantic_health.sh` | Semantic memory health check for table       |
-| `scripts/check_anchor_health.sh`      | PointCloud anchor diagnostic                    |
-| `scripts/record_lidar_health.sh`      | Record LiDAR scan health over time              |
-| `scripts/record_semantic_lifecycle.sh`| Record full semantic lifecycle to bag           |
-| `scripts/cleanup_semantic_landmarks.sh` | Remove stale landmarks from memory             |
-
----
-
-## Known Limitations
-
-- **Simulation only.** This demo runs exclusively in Isaac Sim; it has not
-  been deployed on a physical Unitree Go2.
-- **No locomotion policy in the final MVP path.** The kinematic / sim backend
-  is used for stable demo behavior.  Locomotion policy scaffolding exists in
-  the tree but is not part of the validated end-to-end flow.
-- **Table detection is view-dependent.** YOLOE must see a clear frontal or
-  top-down view; detection may miss the table from certain angles.
-- **Semantic landmarks depend on YOLOE + PointCloud anchoring.** False
-  positives or sparse depth returns can produce ghost landmarks.
-- **LiDAR required careful tuning.** The default `OS1_REV6_32ch10hz512res`
-  profile was chosen for stability; higher-resolution profiles may cause
-  scan drop-outs in sim.
-- **Some legacy Day-numbered scripts and chair references** remain in the tree
-  for historical reference and are not part of the current demo path.
+- **Simulation only.** This demo runs exclusively in Isaac Sim; it has not been deployed on a physical Unitree Go2.
+- **Navigation arrival reporting.** Under certain costmap inflation conditions, the FSM may report `FAILED` after the robot has physically reached the target vicinity (Nav2 `xy_goal_tolerance` vs. inflated obstacle layer near large furniture). Workaround: increase `xy_goal_tolerance` in `nav2_params_social.yaml` for the controller.
+- **Semantic marker deduplication is per-session.** Re-detections of the same object across long horizons may register as new markers; cross-session persistence is future work.
+- **View-dependent detection.** YOLOE confidence on table/chair depends on viewing angle; sparse depth returns near object edges can produce occasional ghost anchors.
 
 ---
 
 ## Future Work
 
-- Real Unitree Go2 deployment and hardware-in-the-loop testing
-- Locomotion policy integration for dynamic locomotion on real terrain
-- Object-level SLAM and more robust semantic perception
-- Multi-object disambiguation (e.g., multiple tables in the scene)
-- Cleaner automated integration tests and packaging
-- Full English documentation cleanup and contribution guidelines
+Three directions naturally extend this work:
+
+1. **Long-term semantic memory** — cross-session marker persistence and deduplication, enabling long-horizon inspection in large-scale environments.
+2. **Richer command grounding** — replacing the keyword-based `/user_command` with a vision-language-action (VLA) front-end for compositional instructions.
+3. **Dynamic obstacle handling and social-aware planning** — extending beyond marking-layer inflation to model human motion and personal-space constraints when sharing the warehouse with workers.
+
+The Unitree Go2 platform is particularly well-suited to these directions: a legged base allows close interaction with humans on unstructured floors, beyond what wheeled platforms (e.g., TurtleBot) can offer.
 
 ---
 
 ## Documentation
 
-- [`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md) — Full step-by-step runbook
-- [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — Development notes and
-  per-Day acceptance status
+- [`docs/HOW_TO_RUN.md`](docs/HOW_TO_RUN.md) — full step-by-step runbook
+- [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — development notes
 
 ---
 
