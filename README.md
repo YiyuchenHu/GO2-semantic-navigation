@@ -9,8 +9,6 @@
 
 <video src="https://github.com/YiyuchenHu/GO2-semantic-navigation/raw/main/docs/media/demo_full.mp4" controls muted width="720"></video>
 
-*Full demo (mp4, 6.3 MB) — inline player above. Click ⛶ to fullscreen.*
-
 ---
 
 ## What this is
