@@ -7,7 +7,7 @@
 
 *Above: `/user_command "find chair"` → autonomous exploration → YOLOE target detection → FSM transitions `EXPLORE → TARGET_FOUND → NAVIGATE_TO_GOAL → ARRIVED`. Isaac Sim 5.1, real-time (1×).*
 
-<video src="https://github.com/YiyuchenHu/GO2-semantic-navigation/raw/main/docs/media/demo_full.mp4" controls muted width="720"></video>
+📺 **Full demo video:** [Bilibili (中国/中国大陆)](https://www.bilibili.com/video/BV1hE5z6eED9/) · [Google Drive (international)](https://drive.google.com/file/d/1liMsHpR0CYuPWlo16TZrYuLsMkvTWWOR/view?usp=sharing)
 
 ---
 
